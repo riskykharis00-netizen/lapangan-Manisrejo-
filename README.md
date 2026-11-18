@@ -1,8 +1,8 @@
-# Lapangan Bulutangkis Manisrejo
+# Lapangan Bulutangkis Manisrejo (Website)
 
 Website pemesanan serta pengelolaan jadwal sewa **Lapangan Bulutangkis Manisrejo** (Senin – Minggu, pukul **08:00 – 00:00**, **Lapangan A & Lapangan B**, tarif **Rp 15.000/jam**).
 
-Codingan website dipecah rapi **per bagian file** dan dipisahkan antara halaman **Orang Pesan (Penyewa)** dan **Editor Website (Pengelola)** agar langsung terbuka saat link GitHub Pages dibuka tanpa perlu login Google.
+Aplikasi sudah sepenuhnya diubah menjadi **Website** yang langsung terbuka tanpa login Google dan tanpa tampilan aplikasi Android. Halaman dipisahkan antara **Orang Pesan (Penyewa)** dan **Editor Website (Pengelola)**.
 
 ---
 
