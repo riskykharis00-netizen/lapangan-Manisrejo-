@@ -170,9 +170,6 @@
           b.paymentStatus = "PAID";
           b.paidAmount = b.totalPrice;
           P.saveStore(store, { source: "editor_paid" });
-          if (typeof P.updateCloudSlot === "function") {
-            P.updateCloudSlot(b, { paymentStatus: "PAID", paidAmount: b.totalPrice });
-          }
           P.showToast(`${b.customerName} ditandai Lunas.`);
           renderAll();
         };
@@ -183,9 +180,6 @@
         remindBtn.onclick = () => {
           b.reminderSentCount = (b.reminderSentCount || 0) + 1;
           P.saveStore(store, { source: "editor_remind" });
-          if (typeof P.updateCloudSlot === "function") {
-            P.updateCloudSlot(b, { reminderSentCount: b.reminderSentCount });
-          }
           const msg = `Halo ${b.customerName}, pengingat pembayaran sewa ${b.courtName} (${dayDateText}, ${P.formatRange(b.startHour, b.durationHours)}) sebesar ${P.formatRupiah(remaining)}. Terima kasih — ${store.venue.name}.`;
           P.showToast(`Pengingat ke-${b.reminderSentCount} dicatat!`);
           if (b.customerPhone) window.open(P.buildWhatsAppUrl(b.customerPhone, msg), "_blank", "noopener");
@@ -209,9 +203,6 @@
           createdAt: Date.now(),
         });
         P.saveStore(store, { source: "editor_cancel" });
-        if (typeof P.updateCloudSlot === "function") {
-          P.updateCloudSlot(b, { status: "DIBATALKAN" });
-        }
         P.showToast(`Jadwal ${b.courtName} milik ${b.customerName} dibatalkan.`);
         renderAll();
       };
@@ -355,27 +346,22 @@
     if (!btn || !labelEl || typeof P.getSyncStatus !== "function") return;
     const st = P.getSyncStatus();
     const clock = P.formatTimeClock(st.lastSyncedAt);
-    if (st.mode === "CLOUD_LIVE") {
-      btn.classList.add("cloud");
-      btn.title = `Sinkron Cloud aktif (${st.userEmail || "Google"}) — klik untuk putuskan`;
-      labelEl.textContent = `Sinkron Cloud • ${clock}`;
-    } else {
-      btn.classList.remove("cloud");
-      btn.title = "Sinkron Otomatis aktif — klik untuk hubungkan Cloud Google (lintas HP/perangkat)";
-      labelEl.textContent = `Sinkron Otomatis • ${clock}`;
-    }
+    btn.classList.remove("cloud");
+    btn.title = "Sinkron Otomatis antar-tab aktif — klik untuk segarkan jadwal";
+    labelEl.textContent = `Sinkron Otomatis • ${clock}`;
   }
 
   const edSyncBtn = document.getElementById("edSyncStatusBtn");
   if (edSyncBtn) {
-    edSyncBtn.onclick = async () => {
-      const st = P.getSyncStatus();
-      if (st.mode === "CLOUD_LIVE") {
-        await P.disconnectCloudSync();
-      } else {
-        await P.connectCloudSync();
+    edSyncBtn.onclick = () => {
+      if (typeof P.triggerManualSync === "function") {
+        P.triggerManualSync();
+      }
+      if (sessionStorage.getItem(SESSION_KEY) === "1") {
+        renderAll();
       }
       updateEditorSyncBadge();
+      P.showToast("Jadwal disegarkan (Sinkron Otomatis aktif).");
     };
   }
 
@@ -396,7 +382,7 @@
           renderCourts();
           renderVenueForm();
         }
-        if (ev.reason === "cross_tab" || ev.reason === "storage_event" || ev.reason === "cloud_snapshot") {
+        if (ev.reason === "cross_tab" || ev.reason === "storage_event") {
           P.showToast("Pesanan / jadwal baru otomatis disinkronkan!");
         }
       }

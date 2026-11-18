@@ -1,0 +1,18 @@
+title: Lapangan Bulutangkis Manisrejo
+description: Portal Pemesanan & Editor Jadwal Lapangan Bulutangkis Manisrejo
+exclude:
+  - app/
+  - gradle/
+  - build.gradle.kts
+  - settings.gradle.kts
+  - gradle.properties
+  - debug.keystore.base64
+  - firebase-blueprint.json
+  - firebase.json
+  - firestore.rules
+  - firestore.test.js
+  - metadata.json
+  - README.md
+  - .env.example
+  - .github/
+  - .gitignore

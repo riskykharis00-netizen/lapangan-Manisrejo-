@@ -7,17 +7,6 @@
   const RACKET_PRICE = 10000;
   const COCK_PRICE = 12000;
 
-  // Provisioned Firebase config for real-time cross-device cloud sync
-  const FIREBASE_CONFIG = {
-    apiKey: "AIzaSyC40vJWxGNQrTmFK6dj6afzkDjMNIYN7y4",
-    authDomain: "gen-lang-client-0641484956.firebaseapp.com",
-    projectId: "gen-lang-client-0641484956",
-    storageBucket: "gen-lang-client-0641484956.firebasestorage.app",
-    messagingSenderId: "990123663113",
-    appId: "1:990123663113:android:e69743e1ac47316fc97dd8",
-  };
-  const FIRESTORE_DATABASE_ID = "ai-studio-android-shuttlec-cbccc3c7-a99c-484f-9d0e-055fde3b0723";
-
   const DAYS = [
     { id: 1, name: "Senin", short: "Sen" },
     { id: 2, name: "Selasa", short: "Sel" },
@@ -36,21 +25,13 @@
 
   const syncListeners = new Set();
   const broadcast = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(SYNC_CHANNEL_NAME) : null;
-  const cloudState = {
-    initialized: false,
-    user: null,
-    mode: "LOCAL_REALTIME", // LOCAL_REALTIME | CLOUD_LIVE | CLOUD_ERROR
+  const syncState = {
+    mode: "LOCAL_REALTIME",
     lastSyncedAt: Date.now(),
-    errorMsg: "",
-    app: null,
-    auth: null,
-    db: null,
-    firestoreApi: null,
-    authApi: null,
   };
 
   function emitSyncEvent(reason, detail) {
-    cloudState.lastSyncedAt = Date.now();
+    syncState.lastSyncedAt = Date.now();
     syncListeners.forEach((cb) => {
       try {
         cb({ reason, detail, state: getSyncStatus() });
@@ -60,11 +41,13 @@
 
   function getSyncStatus() {
     return {
-      mode: cloudState.mode,
-      userEmail: cloudState.user ? cloudState.user.email : null,
-      lastSyncedAt: cloudState.lastSyncedAt,
-      errorMsg: cloudState.errorMsg,
+      mode: syncState.mode,
+      lastSyncedAt: syncState.lastSyncedAt,
     };
+  }
+
+  function triggerManualSync() {
+    emitSyncEvent("manual_sync", "Jadwal diperbarui");
   }
 
   function formatTimeClock(ts) {
@@ -270,237 +253,6 @@
     });
   }
 
-  async function initCloudSdk() {
-    if (cloudState.initialized) return true;
-    if (typeof window === "undefined" || window.location.protocol === "file:") return false;
-    try {
-      const [appMod, authMod, fsMod] = await Promise.all([
-        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js"),
-        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js"),
-        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js"),
-      ]);
-      const app = appMod.getApps().length ? appMod.getApp() : appMod.initializeApp(FIREBASE_CONFIG);
-      const auth = authMod.getAuth(app);
-      const db = fsMod.getFirestore(app, FIRESTORE_DATABASE_ID);
-      cloudState.app = app;
-      cloudState.auth = auth;
-      cloudState.db = db;
-      cloudState.authApi = authMod;
-      cloudState.firestoreApi = fsMod;
-      cloudState.initialized = true;
-
-      authMod.onAuthStateChanged(auth, (user) => {
-        cloudState.user = user || null;
-        if (user) {
-          startCloudSnapshotSync();
-        } else {
-          cloudState.mode = "LOCAL_REALTIME";
-          emitSyncEvent("cloud_signed_out");
-        }
-      });
-      return true;
-    } catch (err) {
-      cloudState.errorMsg = err && err.message ? err.message : "Offline / Cloud SDK tidak tersedia";
-      cloudState.mode = "LOCAL_REALTIME";
-      emitSyncEvent("cloud_unavailable");
-      return false;
-    }
-  }
-
-  let unsubSlots = null;
-  let unsubCourts = null;
-
-  function stopCloudSnapshotSync() {
-    if (typeof unsubSlots === "function") unsubSlots();
-    if (typeof unsubCourts === "function") unsubCourts();
-    unsubSlots = null;
-    unsubCourts = null;
-  }
-
-  function startCloudSnapshotSync() {
-    if (!cloudState.db || !cloudState.firestoreApi || !cloudState.user) return;
-    stopCloudSnapshotSync();
-    const { collection, query, where, onSnapshot } = cloudState.firestoreApi;
-    cloudState.mode = "CLOUD_LIVE";
-    cloudState.errorMsg = "";
-
-    const slotsQuery = query(collection(cloudState.db, "schedule_slots"), where("venueId", "==", "manisrejo"));
-    unsubSlots = onSnapshot(
-      slotsQuery,
-      (snapshot) => {
-        const store = loadStore();
-        const remoteSlots = [];
-        const remoteHistory = [];
-        snapshot.forEach((docSnap) => {
-          const d = docSnap.data();
-          const numId = docSnap.id;
-          const createdMs = d.createdAt && typeof d.createdAt.toMillis === "function" ? d.createdAt.toMillis() : Date.now();
-          if (d.status === "AKTIF") {
-            remoteSlots.push({
-              id: numId,
-              slotDocId: docSnap.id,
-              userId: d.userId || "",
-              courtId: Number(d.courtId || 1),
-              courtName: d.courtName || "Lapangan A",
-              dayOfWeek: Number(d.dayOfWeek || 1),
-              bookingDate: d.bookingDate || getDateForDayOfWeek(Number(d.dayOfWeek || 1)),
-              startHour: Number(d.startHour || 18),
-              durationHours: Number(d.durationHours || 1),
-              customerName: d.displayName || "Penyewa",
-              customerPhone: "",
-              racketCount: Number(d.racketCount || 0),
-              cockCount: Number(d.cockCount || 0),
-              totalPrice: Number(d.totalPrice || 0),
-              paidAmount: Number(d.paidAmount || 0),
-              paymentStatus: d.paymentStatus || "UNPAID",
-              reminderSentCount: Number(d.reminderSentCount || 0),
-              notes: d.notes || "",
-              createdAt: createdMs,
-            });
-          }
-          remoteHistory.push({
-            id: docSnap.id,
-            courtId: Number(d.courtId || 1),
-            courtName: d.courtName || "Lapangan A",
-            dayOfWeek: Number(d.dayOfWeek || 1),
-            bookingDate: d.bookingDate || getDateForDayOfWeek(Number(d.dayOfWeek || 1)),
-            startHour: Number(d.startHour || 18),
-            durationHours: Number(d.durationHours || 1),
-            customerName: d.displayName || "Penyewa",
-            totalPrice: Number(d.totalPrice || 0),
-            notes: d.notes || "",
-            status: d.status === "DIBATALKAN" ? "CANCELLED" : "CONFIRMED",
-            createdAt: createdMs,
-          });
-        });
-
-        store.bookings = remoteSlots;
-        remoteHistory.sort((a, b) => b.createdAt - a.createdAt);
-        store.history = remoteHistory;
-        cloudState.mode = "CLOUD_LIVE";
-        saveStore(store, { source: "cloud_snapshot", silentEmit: false });
-      },
-      (err) => {
-        cloudState.mode = "LOCAL_REALTIME";
-        cloudState.errorMsg = err && err.message ? err.message : "Sinkron cloud terhenti";
-        emitSyncEvent("cloud_error", cloudState.errorMsg);
-      }
-    );
-
-    const courtsQuery = query(collection(cloudState.db, "courts"), where("venueId", "==", "manisrejo"));
-    unsubCourts = onSnapshot(courtsQuery, (snapshot) => {
-      if (snapshot.empty) return;
-      const store = loadStore();
-      const syncedCourts = [];
-      snapshot.forEach((docSnap) => {
-        const d = docSnap.data();
-        syncedCourts.push({
-          id: Number(d.courtNumber || 1),
-          docId: docSnap.id,
-          name: d.name || `Lapangan ${d.courtNumber || 1}`,
-          rate: Number(d.hourlyRateRegular || 15000),
-          active: d.active !== false,
-          note: d.surfaceType || "",
-        });
-      });
-      syncedCourts.sort((a, b) => a.id - b.id);
-      if (syncedCourts.length > 0) {
-        store.courts = syncedCourts;
-        saveStore(store, { source: "cloud_courts" });
-      }
-    });
-  }
-
-  async function pushBookingsToCloud(createdBookings) {
-    if (!cloudState.user || !cloudState.db || !cloudState.firestoreApi) return;
-    const { doc, writeBatch, serverTimestamp } = cloudState.firestoreApi;
-    const uid = cloudState.user.uid;
-    const batch = writeBatch(cloudState.db);
-    createdBookings.forEach((b, idx) => {
-      const slotId = `web_${b.id}_${idx}`;
-      b.slotDocId = slotId;
-      b.userId = uid;
-      batch.set(doc(cloudState.db, "schedule_slots", slotId), {
-        venueId: "manisrejo",
-        userId: uid,
-        courtId: Number(b.courtId),
-        courtName: String(b.courtName).slice(0, 50),
-        dayOfWeek: Number(b.dayOfWeek),
-        bookingDate: String(b.bookingDate || "").slice(0, 20),
-        startHour: Number(b.startHour),
-        durationHours: Number(b.durationHours),
-        displayName: String(b.customerName).slice(0, 60),
-        totalPrice: Number(b.totalPrice),
-        paidAmount: Number(b.paidAmount || 0),
-        paymentStatus: b.paymentStatus || "UNPAID",
-        racketCount: Number(b.racketCount || 0),
-        cockCount: Number(b.cockCount || 0),
-        reminderEnabled: b.paymentStatus !== "PAID",
-        reminderSentCount: 0,
-        notes: String(b.notes || "").slice(0, 250),
-        status: "AKTIF",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(doc(cloudState.db, "users", uid, "bookings", slotId), {
-        userId: uid,
-        slotId,
-        customerName: String(b.customerName).slice(0, 60),
-        customerPhone: String(b.customerPhone || "").slice(0, 30),
-        notes: String(b.notes || "").slice(0, 250),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    });
-    await batch.commit();
-  }
-
-  async function updateCloudSlot(booking, patchFields) {
-    if (!cloudState.user || !cloudState.db || !cloudState.firestoreApi) return;
-    const docId = booking.slotDocId || (typeof booking.id === "string" ? booking.id : null);
-    if (!docId) return;
-    const { doc, updateDoc, serverTimestamp } = cloudState.firestoreApi;
-    try {
-      await updateDoc(doc(cloudState.db, "schedule_slots", docId), {
-        ...patchFields,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      cloudState.errorMsg = err && err.message ? err.message : "Gagal update ke cloud";
-      emitSyncEvent("cloud_error", cloudState.errorMsg);
-    }
-  }
-
-  async function connectCloudSync() {
-    const ok = await initCloudSdk();
-    if (!ok || !cloudState.authApi || !cloudState.auth) {
-      showToast("Sinkron lokal antar-tab aktif. Buka lewat HTTPS/hosting untuk Sinkron Cloud Google.");
-      return false;
-    }
-    try {
-      const provider = new cloudState.authApi.GoogleAuthProvider();
-      await cloudState.authApi.signInWithPopup(cloudState.auth, provider);
-      showToast("Sinkron Cloud Google aktif! Jadwal terhubung real-time dengan Android.");
-      return true;
-    } catch (err) {
-      cloudState.errorMsg = err && err.message ? err.message : "Login Google dibatalkan";
-      emitSyncEvent("cloud_error", cloudState.errorMsg);
-      showToast("Sinkron lokal tetap aktif (" + cloudState.errorMsg + ")");
-      return false;
-    }
-  }
-
-  async function disconnectCloudSync() {
-    stopCloudSnapshotSync();
-    if (cloudState.authApi && cloudState.auth) {
-      await cloudState.authApi.signOut(cloudState.auth);
-    }
-    cloudState.user = null;
-    cloudState.mode = "LOCAL_REALTIME";
-    emitSyncEvent("cloud_signed_out");
-    showToast("Keluar dari Sinkron Cloud. Sinkron lokal tetap aktif.");
-  }
-
   function formatHour(hour) {
     const h = Number(hour);
     if (h === 24 || h === 0) return "00:00";
@@ -684,9 +436,6 @@
     });
 
     saveStore(store, { source: "booking_created" });
-    if (cloudState.user) {
-      pushBookingsToCloud(createdBookings).catch(() => {});
-    }
     return { bookings: createdBookings };
   }
 
@@ -721,9 +470,6 @@
     });
   }
 
-  // Initialize passive cloud auth listener in background if served over HTTP/HTTPS
-  initCloudSdk().catch(() => {});
-
   window.ManisrejoPortal = {
     OPEN_HOUR,
     CLOSE_HOUR,
@@ -743,10 +489,8 @@
       return () => syncListeners.delete(cb);
     },
     getSyncStatus,
+    triggerManualSync,
     formatTimeClock,
-    connectCloudSync,
-    disconnectCloudSync,
-    updateCloudSlot,
     formatHour,
     formatRange,
     parseManualHour,
