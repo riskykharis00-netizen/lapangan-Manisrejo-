@@ -1,0 +1,297 @@
+{
+  "entities": {
+    "Court": {
+      "title": "Court",
+      "description": "Konfigurasi lapangan bulutangkis (Lapangan A, Lapangan B) dan tarif per jam.",
+      "type": "object",
+      "properties": {
+        "venueId": {
+          "type": "string",
+          "description": "Identifier lokasi arena ('manisrejo')."
+        },
+        "courtNumber": {
+          "type": "integer",
+          "description": "Nomor urut lapangan (1, 2, ...)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Nama lapangan (misal: Lapangan A)."
+        },
+        "surfaceType": {
+          "type": "string",
+          "description": "Keterangan lapangan opsional."
+        },
+        "hourlyRateRegular": {
+          "type": "integer",
+          "description": "Tarif sewa reguler per jam dalam Rupiah."
+        },
+        "hourlyRatePrime": {
+          "type": "integer",
+          "description": "Tarif sewa jam malam per jam dalam Rupiah."
+        },
+        "hourlyRateWeekend": {
+          "type": "integer",
+          "description": "Tarif sewa akhir pekan per jam dalam Rupiah."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Status aktif lapangan untuk pemesanan."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan server (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "venueId",
+        "courtNumber",
+        "name",
+        "hourlyRateRegular",
+        "hourlyRatePrime",
+        "hourlyRateWeekend",
+        "active",
+        "updatedAt"
+      ]
+    },
+    "ScheduleSlot": {
+      "title": "ScheduleSlot",
+      "description": "Slot pemesanan publik tanpa PII untuk sinkronisasi jadwal real-time setiap kali ada pemesanan.",
+      "type": "object",
+      "properties": {
+        "venueId": {
+          "type": "string",
+          "description": "Identifier lokasi arena ('manisrejo')."
+        },
+        "userId": {
+          "type": "string",
+          "description": "UID pengguna Firebase Auth pembuat pemesanan."
+        },
+        "courtId": {
+          "type": "integer",
+          "description": "ID numerik lapangan (1 = Lapangan A, 2 = Lapangan B)."
+        },
+        "courtName": {
+          "type": "string",
+          "description": "Nama lapangan saat pemesanan."
+        },
+        "dayOfWeek": {
+          "type": "integer",
+          "description": "Hari ISO 1 (Senin) sampai 7 (Minggu)."
+        },
+        "bookingDate": {
+          "type": "string",
+          "description": "Tanggal pemesanan format YYYY-MM-DD (opsional)."
+        },
+        "startHour": {
+          "type": "integer",
+          "description": "Jam mulai bermain (8..23)."
+        },
+        "durationHours": {
+          "type": "integer",
+          "description": "Durasi sewa dalam jam (1..16)."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Nama pemesan atau klub yang tampil di papan jadwal."
+        },
+        "totalPrice": {
+          "type": "integer",
+          "description": "Total biaya sewa + tambahan raket/cock dalam Rupiah."
+        },
+        "paidAmount": {
+          "type": "integer",
+          "description": "Nominal yang sudah dibayar dalam Rupiah."
+        },
+        "paymentStatus": {
+          "type": "string",
+          "enum": ["UNPAID", "DP", "PAID"],
+          "description": "Status pembayaran saat ini."
+        },
+        "racketCount": {
+          "type": "integer",
+          "description": "Jumlah sewa raket (Rp 10.000 per raket)."
+        },
+        "cockCount": {
+          "type": "integer",
+          "description": "Jumlah beli cock (Rp 12.000 per cock)."
+        },
+        "reminderEnabled": {
+          "type": "boolean",
+          "description": "Status aktif pengingat pembayaran."
+        },
+        "reminderSentCount": {
+          "type": "integer",
+          "description": "Jumlah pengingat yang sudah dikirim."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Ringkasan tambahan raket/cock atau catatan."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["AKTIF", "DIBATALKAN"],
+          "description": "Status pemesanan jadwal."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan server (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan server (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "venueId",
+        "userId",
+        "courtId",
+        "courtName",
+        "dayOfWeek",
+        "startHour",
+        "durationHours",
+        "displayName",
+        "totalPrice",
+        "paidAmount",
+        "paymentStatus",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PrivateBooking": {
+      "title": "PrivateBooking",
+      "description": "Detail kontak pribadi pemesanan (nomor WhatsApp/HP) yang terisolasi per pengguna.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID pemilik dokumen."
+        },
+        "slotId": {
+          "type": "string",
+          "description": "ID dokumen pada koleksi schedule_slots."
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Nama pemesan atau klub."
+        },
+        "customerPhone": {
+          "type": "string",
+          "description": "Nomor WhatsApp pemesan (PII terisolasi)."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Catatan tambahan pemesanan."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan server (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembaruan server (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "slotId",
+        "customerName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ReminderLog": {
+      "title": "ReminderLog",
+      "description": "Riwayat notifikasi konfirmasi dan pengingat pembayaran milik pengguna.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "UID pemilik log."
+        },
+        "bookingDocId": {
+          "type": "string",
+          "description": "ID slot pemesanan terkait."
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Nama pemesan."
+        },
+        "courtName": {
+          "type": "string",
+          "description": "Nama lapangan."
+        },
+        "scheduleLabel": {
+          "type": "string",
+          "description": "Label jadwal hari dan jam."
+        },
+        "stageLabel": {
+          "type": "string",
+          "description": "Tahap notifikasi."
+        },
+        "amountDue": {
+          "type": "integer",
+          "description": "Nominal tagihan tersisa."
+        },
+        "scheduledForMillis": {
+          "type": "integer",
+          "description": "Waktu jadwal pengingat."
+        },
+        "sentAtMillis": {
+          "type": "integer",
+          "description": "Waktu terkirim (opsional)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["KONFIRMASI", "TERJADWAL", "TERKIRIM", "LUNAS"],
+          "description": "Status log pengingat."
+        },
+        "message": {
+          "type": "string",
+          "description": "Isi pesan pengingat."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembuatan server (FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "bookingDocId",
+        "customerName",
+        "courtName",
+        "scheduleLabel",
+        "stageLabel",
+        "amountDue",
+        "scheduledForMillis",
+        "status",
+        "message",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/courts/{courtId}": {
+      "schema": { "$ref": "#/entities/Court" },
+      "description": "Daftar lapangan bulutangkis dan tarifnya (non-PII, dapat dibaca pengguna terautentikasi)."
+    },
+    "/schedule_slots/{slotId}": {
+      "schema": { "$ref": "#/entities/ScheduleSlot" },
+      "description": "Jadwal pemesanan real-time tanpa PII agar ketersediaan lapangan tersinkron otomatis."
+    },
+    "/users/{userId}/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/PrivateBooking" },
+      "description": "Data kontak PII pemesanan milik masing-masing pengguna."
+    },
+    "/users/{userId}/reminder_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ReminderLog" },
+      "description": "Log pengingat pembayaran milik pengguna."
+    }
+  }
+}

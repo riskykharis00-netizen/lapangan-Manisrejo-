@@ -24,13 +24,13 @@
     e.preventDefault();
     store = P.loadStore();
     const entered = document.getElementById("pinInput").value.trim();
-    if (entered === String(store.editorPin || "1234")) {
+    if (entered === String(store.editorPin || P.DEFAULT_EDITOR_PIN || "00000")) {
       sessionStorage.setItem(SESSION_KEY, "1");
       document.getElementById("pinInput").value = "";
       checkAuth();
       P.showToast("Mode Editor Website aktif.");
     } else {
-      P.showToast("PIN Editor salah. Default: 1234.");
+      P.showToast("PIN Editor salah. Default: 00000.");
     }
   });
 
@@ -169,7 +169,10 @@
         paidBtn.onclick = () => {
           b.paymentStatus = "PAID";
           b.paidAmount = b.totalPrice;
-          P.saveStore(store);
+          P.saveStore(store, { source: "editor_paid" });
+          if (typeof P.updateCloudSlot === "function") {
+            P.updateCloudSlot(b, { paymentStatus: "PAID", paidAmount: b.totalPrice });
+          }
           P.showToast(`${b.customerName} ditandai Lunas.`);
           renderAll();
         };
@@ -179,7 +182,10 @@
       if (remindBtn) {
         remindBtn.onclick = () => {
           b.reminderSentCount = (b.reminderSentCount || 0) + 1;
-          P.saveStore(store);
+          P.saveStore(store, { source: "editor_remind" });
+          if (typeof P.updateCloudSlot === "function") {
+            P.updateCloudSlot(b, { reminderSentCount: b.reminderSentCount });
+          }
           const msg = `Halo ${b.customerName}, pengingat pembayaran sewa ${b.courtName} (${dayDateText}, ${P.formatRange(b.startHour, b.durationHours)}) sebesar ${P.formatRupiah(remaining)}. Terima kasih — ${store.venue.name}.`;
           P.showToast(`Pengingat ke-${b.reminderSentCount} dicatat!`);
           if (b.customerPhone) window.open(P.buildWhatsAppUrl(b.customerPhone, msg), "_blank", "noopener");
@@ -202,7 +208,10 @@
           status: "CANCELLED",
           createdAt: Date.now(),
         });
-        P.saveStore(store);
+        P.saveStore(store, { source: "editor_cancel" });
+        if (typeof P.updateCloudSlot === "function") {
+          P.updateCloudSlot(b, { status: "DIBATALKAN" });
+        }
         P.showToast(`Jadwal ${b.courtName} milik ${b.customerName} dibatalkan.`);
         renderAll();
       };
@@ -251,7 +260,7 @@
     document.getElementById("edVenueName").value = store.venue.name;
     document.getElementById("edVenuePhone").value = store.venue.phone;
     document.getElementById("edVenueMaps").value = store.venue.mapsUrl;
-    document.getElementById("edNewPin").value = store.editorPin || "1234";
+    document.getElementById("edNewPin").value = store.editorPin || P.DEFAULT_EDITOR_PIN || "00000";
   }
 
   function renderAll() {
@@ -320,8 +329,8 @@
     store.venue.name = document.getElementById("edVenueName").value.trim() || store.venue.name;
     store.venue.phone = document.getElementById("edVenuePhone").value.trim() || store.venue.phone;
     store.venue.mapsUrl = document.getElementById("edVenueMaps").value.trim() || store.venue.mapsUrl;
-    store.editorPin = document.getElementById("edNewPin").value.trim() || "1234";
-    P.saveStore(store);
+    store.editorPin = document.getElementById("edNewPin").value.trim() || P.DEFAULT_EDITOR_PIN || "00000";
+    P.saveStore(store, { source: "editor_venue" });
     P.showToast("Informasi website & PIN berhasil disimpan.");
     renderAll();
   });
@@ -340,5 +349,60 @@
     renderAll();
   };
 
+  function updateEditorSyncBadge() {
+    const btn = document.getElementById("edSyncStatusBtn");
+    const labelEl = document.getElementById("edSyncStatusLabel");
+    if (!btn || !labelEl || typeof P.getSyncStatus !== "function") return;
+    const st = P.getSyncStatus();
+    const clock = P.formatTimeClock(st.lastSyncedAt);
+    if (st.mode === "CLOUD_LIVE") {
+      btn.classList.add("cloud");
+      btn.title = `Sinkron Cloud aktif (${st.userEmail || "Google"}) — klik untuk putuskan`;
+      labelEl.textContent = `Sinkron Cloud • ${clock}`;
+    } else {
+      btn.classList.remove("cloud");
+      btn.title = "Sinkron Otomatis aktif — klik untuk hubungkan Cloud Google (lintas HP/perangkat)";
+      labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+    }
+  }
+
+  const edSyncBtn = document.getElementById("edSyncStatusBtn");
+  if (edSyncBtn) {
+    edSyncBtn.onclick = async () => {
+      const st = P.getSyncStatus();
+      if (st.mode === "CLOUD_LIVE") {
+        await P.disconnectCloudSync();
+      } else {
+        await P.connectCloudSync();
+      }
+      updateEditorSyncBadge();
+    };
+  }
+
+  if (typeof P.onSync === "function") {
+    P.onSync((ev) => {
+      updateEditorSyncBadge();
+      if (ev.reason === "local_write") return;
+      if (sessionStorage.getItem(SESSION_KEY) === "1") {
+        store = P.loadStore();
+        renderSummary();
+        renderBookings();
+        const activeEl = document.activeElement;
+        const editingForm =
+          (document.getElementById("editorBookingForm")?.contains(activeEl)) ||
+          (document.getElementById("editorCourtsGrid")?.contains(activeEl)) ||
+          (document.getElementById("venueEditorForm")?.contains(activeEl));
+        if (!editingForm) {
+          renderCourts();
+          renderVenueForm();
+        }
+        if (ev.reason === "cross_tab" || ev.reason === "storage_event" || ev.reason === "cloud_snapshot") {
+          P.showToast("Pesanan / jadwal baru otomatis disinkronkan!");
+        }
+      }
+    });
+  }
+
   checkAuth();
+  updateEditorSyncBadge();
 })();

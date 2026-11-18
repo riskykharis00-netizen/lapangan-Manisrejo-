@@ -98,6 +98,35 @@ body {
   font-weight: 700;
 }
 
+.sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid #bbf7d0;
+  background: var(--paid-bg);
+  color: var(--paid-fg);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sync-pill.cloud {
+  background: #dcfce7;
+  border-color: #22c55e;
+  color: #14532d;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+}
+
 .nav-links {
   display: flex;
   flex-wrap: wrap;

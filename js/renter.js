@@ -572,5 +572,69 @@
     window.open(P.buildWhatsAppUrl(store.venue.phone, waText), "_blank", "noopener");
   });
 
+  function updateSyncBadge() {
+    const btn = document.getElementById("syncStatusBtn");
+    const labelEl = document.getElementById("syncStatusLabel");
+    if (!btn || !labelEl || typeof P.getSyncStatus !== "function") return;
+    const st = P.getSyncStatus();
+    const clock = P.formatTimeClock(st.lastSyncedAt);
+    if (st.mode === "CLOUD_LIVE") {
+      btn.classList.add("cloud");
+      btn.title = `Sinkron Cloud aktif (${st.userEmail || "Google"}) — klik untuk putuskan`;
+      labelEl.textContent = `Sinkron Cloud • ${clock}`;
+    } else {
+      btn.classList.remove("cloud");
+      btn.title = "Sinkron Otomatis aktif antar tab — klik untuk hubungkan Cloud Google (lintas HP/perangkat)";
+      labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+    }
+  }
+
+  const syncStatusBtnEl = document.getElementById("syncStatusBtn");
+  if (syncStatusBtnEl) {
+    syncStatusBtnEl.onclick = async () => {
+      const st = P.getSyncStatus();
+      if (st.mode === "CLOUD_LIVE") {
+        await P.disconnectCloudSync();
+      } else {
+        await P.connectCloudSync();
+      }
+      updateSyncBadge();
+    };
+  }
+
+  function refreshViewOnSync(reason) {
+    store = P.loadStore();
+    renderVenueLinks();
+    renderDayStrip();
+    renderFilters();
+    const editingHours = perCourtHoursEl && perCourtHoursEl.contains(document.activeElement);
+    if (!editingHours) {
+      renderPerCourtHourInputs();
+    }
+    renderSlots();
+    updatePricePreview();
+    if (!document.getElementById("sectionMingguan").classList.contains("hidden")) {
+      renderWeekly();
+    }
+    if (!document.getElementById("sectionRiwayat").classList.contains("hidden")) {
+      renderHistory();
+    }
+    updateSyncBadge();
+    if (reason === "cross_tab" || reason === "storage_event" || reason === "cloud_snapshot") {
+      P.showToast("Jadwal terbaru otomatis diperbarui.");
+    }
+  }
+
+  if (typeof P.onSync === "function") {
+    P.onSync((ev) => {
+      if (ev.reason === "local_write") {
+        updateSyncBadge();
+        return;
+      }
+      refreshViewOnSync(ev.reason);
+    });
+  }
+
   renderAll();
+  updateSyncBadge();
 })();

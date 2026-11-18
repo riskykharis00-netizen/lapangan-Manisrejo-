@@ -28,3 +28,7 @@ debug.keystore
 *.aab
 *.ap_
 *.dex
+
+# Firebase CLI ephemeral emulator logs
+*-debug.log
+

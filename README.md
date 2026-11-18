@@ -11,11 +11,11 @@ Codingan website sudah dipecah rapi **per bagian file** dan dipisahkan antara ha
 ### Bagian Website (Siap GitHub Pages)
 ```text
 ├── index.html          # [Bagian 1] Halaman HTML khusus Orang Pesan (Penyewa)
-├── editor.html         # [Bagian 2] Halaman HTML khusus Editor Website (PIN default: 1234)
+├── editor.html         # [Bagian 2] Halaman HTML khusus Editor Website (PIN default: 00000)
 ├── css/
 │   └── styles.css      # [Bagian 3] Tampilan & layout website (Emerald & Lime)
 └── js/
-    ├── storage.js      # [Bagian 4] Penyimpanan data, format jam 08:00–00:00 & validasi bentrok
+    ├── storage.js      # [Bagian 4] Penyimpanan data, sinkron otomatis real-time & validasi bentrok
     ├── renter.js       # [Bagian 5] Logika jadwal, pesan 1/2 lapangan & riwayat penyewa
     └── editor.js       # [Bagian 6] Logika PIN, tagihan Lunas/DP, pengingat WA & editor lapangan
 ```
@@ -70,7 +70,8 @@ git push -u origin main
 3. Klik **Save**, lalu tunggu 1–2 menit hingga tautan website muncul.
 4. Website Anda siap diakses secara terpisah:
    - **Link Orang Pesan (Penyewa)**: `https://USERNAME_ANDA.github.io/lapangan-bulutangkis-manisrejo/`
-   - **Link Editor Website (Pengelola)**: `https://USERNAME_ANDA.github.io/lapangan-bulutangkis-manisrejo/editor.html` (PIN bawaan: `1234`)
+   - **Link Editor Website (Pengelola)**: `https://USERNAME_ANDA.github.io/lapangan-bulutangkis-manisrejo/editor.html` (PIN bawaan: `00000`)
+5. **Sinkron Otomatis**: Setiap pemesanan otomatis tersinkron secara real-time antar-tab browser (`BroadcastChannel`) dan dapat dihubungkan lintas perangkat/Android melalui tombol **Sinkron Cloud** (Firebase Firestore).
 
 ---
 

@@ -1,0 +1,218 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED HELPERS ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (
+          ('email_verified' in request.auth.token) &&
+          request.auth.token.email_verified == true &&
+          ('email' in request.auth.token) &&
+          request.auth.token.email == 'Riskykharis00@gmail.com'
+        ) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- ENTITY VALIDATION BLUEPRINTS ---
+    function isValidCourt(data) {
+      return data.venueId is string && data.venueId == 'manisrejo' &&
+             data.courtNumber is int && data.courtNumber >= 1 && data.courtNumber <= 50 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 50 &&
+             (!('surfaceType' in data) || (data.surfaceType is string && data.surfaceType.size() <= 80)) &&
+             data.hourlyRateRegular is int && data.hourlyRateRegular >= 0 && data.hourlyRateRegular <= 10000000 &&
+             data.hourlyRatePrime is int && data.hourlyRatePrime >= 0 && data.hourlyRatePrime <= 10000000 &&
+             data.hourlyRateWeekend is int && data.hourlyRateWeekend >= 0 && data.hourlyRateWeekend <= 10000000 &&
+             data.active is bool &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidScheduleSlot(data) {
+      return data.venueId is string && data.venueId == 'manisrejo' &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.courtId is int && data.courtId >= 1 && data.courtId <= 50 &&
+             data.courtName is string && data.courtName.size() >= 1 && data.courtName.size() <= 50 &&
+             data.dayOfWeek is int && data.dayOfWeek >= 1 && data.dayOfWeek <= 7 &&
+             (!('bookingDate' in data) || (data.bookingDate is string && data.bookingDate.size() <= 20)) &&
+             data.startHour is int && data.startHour >= 8 && data.startHour <= 23 &&
+             data.durationHours is int && data.durationHours >= 1 && data.durationHours <= 16 &&
+             data.startHour + data.durationHours <= 24 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.totalPrice is int && data.totalPrice >= 0 && data.totalPrice <= 50000000 &&
+             data.paidAmount is int && data.paidAmount >= 0 && data.paidAmount <= data.totalPrice &&
+             data.paymentStatus in ['UNPAID', 'DP', 'PAID'] &&
+             (!('racketCount' in data) || (data.racketCount is int && data.racketCount >= 0 && data.racketCount <= 50)) &&
+             (!('cockCount' in data) || (data.cockCount is int && data.cockCount >= 0 && data.cockCount <= 100)) &&
+             (!('reminderEnabled' in data) || data.reminderEnabled is bool) &&
+             (!('reminderSentCount' in data) || (data.reminderSentCount is int && data.reminderSentCount >= 0 && data.reminderSentCount <= 100)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 250)) &&
+             data.status in ['AKTIF', 'DIBATALKAN'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPrivateBooking(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.slotId is string && isValidId(data.slotId) &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 60 &&
+             (!('customerPhone' in data) || (data.customerPhone is string && data.customerPhone.size() <= 30)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 250)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidReminderLog(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.bookingDocId is string && isValidId(data.bookingDocId) &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 60 &&
+             data.courtName is string && data.courtName.size() >= 1 && data.courtName.size() <= 50 &&
+             data.scheduleLabel is string && data.scheduleLabel.size() >= 1 && data.scheduleLabel.size() <= 80 &&
+             data.stageLabel is string && data.stageLabel.size() >= 1 && data.stageLabel.size() <= 60 &&
+             data.amountDue is int && data.amountDue >= 0 && data.amountDue <= 50000000 &&
+             data.scheduledForMillis is int && data.scheduledForMillis >= 0 &&
+             (!('sentAtMillis' in data) || (data.sentAtMillis is int && data.sentAtMillis >= 0)) &&
+             data.status in ['KONFIRMASI', 'TERJADWAL', 'TERKIRIM', 'LUNAS'] &&
+             data.message is string && data.message.size() <= 400 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // --- COLLECTIONS ---
+
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && request.auth.uid == adminUid && isValidId(adminUid);
+      allow list, create, update, delete: if false;
+    }
+
+    match /courts/{courtId} {
+      allow get: if isSignedIn() && isValidId(courtId) && existing().venueId == 'manisrejo';
+      allow list: if isSignedIn() && existing().venueId == 'manisrejo';
+
+      allow create: if isSignedIn() &&
+                       isValidId(courtId) &&
+                       isAdmin() &&
+                       incoming().keys().hasAll(['venueId', 'courtNumber', 'name', 'hourlyRateRegular', 'hourlyRatePrime', 'hourlyRateWeekend', 'active', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['venueId', 'courtNumber', 'name', 'surfaceType', 'hourlyRateRegular', 'hourlyRatePrime', 'hourlyRateWeekend', 'active', 'updatedAt']) &&
+                       isValidCourt(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(courtId) &&
+                       isAdmin() &&
+                       isValidCourt(incoming()) &&
+                       incoming().venueId == existing().venueId &&
+                       incoming().courtNumber == existing().courtNumber &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'surfaceType', 'hourlyRateRegular', 'hourlyRatePrime', 'hourlyRateWeekend', 'active', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(courtId) && isAdmin();
+    }
+
+    match /schedule_slots/{slotId} {
+      // Non-PII public schedule board; query MUST filter venueId == 'manisrejo'
+      allow get: if isSignedIn() && isValidId(slotId) && existing().venueId == 'manisrejo';
+      allow list: if isSignedIn() && existing().venueId == 'manisrejo';
+
+      allow create: if isSignedIn() &&
+                       isValidId(slotId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().venueId == 'manisrejo' &&
+                       incoming().status == 'AKTIF' &&
+                       incoming().keys().hasAll(['venueId', 'userId', 'courtId', 'courtName', 'dayOfWeek', 'startHour', 'durationHours', 'displayName', 'totalPrice', 'paidAmount', 'paymentStatus', 'status', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['venueId', 'userId', 'courtId', 'courtName', 'dayOfWeek', 'bookingDate', 'startHour', 'durationHours', 'displayName', 'totalPrice', 'paidAmount', 'paymentStatus', 'racketCount', 'cockCount', 'reminderEnabled', 'reminderSentCount', 'notes', 'status', 'createdAt', 'updatedAt']) &&
+                       isValidScheduleSlot(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(slotId) &&
+                       isValidScheduleSlot(incoming()) &&
+                       incoming().venueId == existing().venueId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Tier 1: Admin / Editor Website updates payment status, reminders, notes, or cancels
+                         (
+                           isAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'paidAmount', 'reminderEnabled', 'reminderSentCount', 'status', 'notes', 'updatedAt'])
+                         ) ||
+                         // Tier 2: Booking creator cancels their own AKTIF booking (Terminal State Locking when DIBATALKAN)
+                         (
+                           existing().userId == request.auth.uid &&
+                           existing().status == 'AKTIF' &&
+                           incoming().status == 'DIBATALKAN' &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(slotId) && isAdmin();
+    }
+
+    match /users/{userId}/bookings/{bookingId} {
+      // PII-isolated per user; owner and admin only
+      allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      allow create: if isOwner(userId) &&
+                       isValidId(bookingId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'slotId', 'customerName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'slotId', 'customerName', 'customerPhone', 'notes', 'createdAt', 'updatedAt']) &&
+                       isValidPrivateBooking(incoming()) &&
+                       existsAfter(/databases/$(database)/documents/schedule_slots/$(incoming().slotId));
+
+      allow update: if isSignedIn() &&
+                       (request.auth.uid == userId || isAdmin()) &&
+                       isValidId(bookingId) &&
+                       isValidPrivateBooking(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().slotId == existing().slotId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['customerPhone', 'notes', 'updatedAt']);
+
+      allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(bookingId);
+    }
+
+    match /users/{userId}/reminder_logs/{logId} {
+      allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      allow create: if isOwner(userId) &&
+                       isValidId(logId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'bookingDocId', 'customerName', 'courtName', 'scheduleLabel', 'stageLabel', 'amountDue', 'scheduledForMillis', 'status', 'message', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'bookingDocId', 'customerName', 'courtName', 'scheduleLabel', 'stageLabel', 'amountDue', 'scheduledForMillis', 'sentAtMillis', 'status', 'message', 'createdAt']) &&
+                       isValidReminderLog(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(logId) &&
+                       isValidReminderLog(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().bookingDocId == existing().bookingDocId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['status', 'sentAtMillis']);
+
+      allow delete: if isOwner(userId) && isValidId(logId);
+    }
+  }
+}

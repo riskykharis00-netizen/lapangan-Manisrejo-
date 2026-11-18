@@ -1,9 +1,7 @@
 package com.example.ui
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.local.AppDatabase
 import com.example.data.local.BookingEntity
 import com.example.data.local.BookingHistoryEntity
 import com.example.data.local.CourtEntity
@@ -11,9 +9,10 @@ import com.example.data.local.PaymentStatus
 import com.example.data.local.ReminderLogEntity
 import com.example.data.repository.CourtScheduleRepository
 import com.example.data.repository.CourtTimeSelection
-import com.example.notifications.PaymentReminderNotifier
 import com.example.util.ScheduleFormatters
+import com.google.firebase.firestore.FirebaseFirestoreException
 import java.util.Calendar
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -21,6 +20,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -58,7 +58,10 @@ data class BookingConfirmationPrompt(
 
 data class ShuttleUiState(
     val isLoading: Boolean = true,
+    val syncError: String? = null,
+    val lastSyncedMillis: Long = System.currentTimeMillis(),
     val userRole: UserRole = UserRole.RENTER,
+    val isEditorUnlocked: Boolean = false,
     val selectedDay: Int = 1,
     val selectedCourtId: Int = 0, // 0 = Semua Lapangan
     val slotFilter: SlotFilter = SlotFilter.ALL,
@@ -89,17 +92,18 @@ data class ShuttleUiState(
         bookings.count { it.dayOfWeek == day && (selectedCourtId == 0 || it.courtId == selectedCourtId) }
 }
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = CourtScheduleRepository(
-        context = application,
-        db = AppDatabase.getInstance(application)
-    )
+class MainViewModel(
+    private val repository: CourtScheduleRepository,
+    val currentUserId: String,
+    val userEmail: String?
+) : ViewModel() {
 
     private val _userRole = MutableStateFlow(UserRole.RENTER)
+    private val _isEditorUnlocked = MutableStateFlow(false)
     private val _selectedDay = MutableStateFlow(currentIsoDayOfWeek())
     private val _selectedCourtId = MutableStateFlow(0)
     private val _slotFilter = MutableStateFlow(SlotFilter.ALL)
+    private val _syncError = MutableStateFlow<String?>(null)
 
     private val _activeTab = MutableStateFlow(AppTab.SCHEDULE)
     val activeTab: StateFlow<AppTab> = _activeTab.asStateFlow()
@@ -110,18 +114,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _confirmationPrompt = MutableStateFlow<BookingConfirmationPrompt?>(null)
     val confirmationPrompt: StateFlow<BookingConfirmationPrompt?> = _confirmationPrompt.asStateFlow()
 
+    private val _showEditorPinDialog = MutableStateFlow(false)
+    val showEditorPinDialog: StateFlow<Boolean> = _showEditorPinDialog.asStateFlow()
+
     private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
+    private fun unwrapFirestoreError(error: Throwable): Throwable {
+        val firestoreError = generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+        if (firestoreError == null && error is CancellationException) throw error
+        return firestoreError ?: error
+    }
+
+    private val safeCourtsFlow = repository.courts.catch { error ->
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan data lapangan."
+        emit(emptyList())
+    }
+
+    private val safeBookingsFlow = repository.bookings.catch { error ->
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan jadwal."
+        emit(emptyList())
+    }
+
+    private val safeHistoryFlow = repository.bookingHistory.catch { error ->
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan riwayat."
+        emit(emptyList())
+    }
+
+    private val safeRemindersFlow = repository.reminderLogs.catch { error ->
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan log pengingat."
+        emit(emptyList())
+    }
+
     val uiState: StateFlow<ShuttleUiState> = combine(
-        repository.courts,
-        repository.bookings,
-        repository.bookingHistory,
-        repository.reminderLogs,
+        safeCourtsFlow,
+        safeBookingsFlow,
+        safeHistoryFlow,
+        safeRemindersFlow,
         _selectedDay,
         _selectedCourtId,
         _slotFilter,
-        _userRole
+        _userRole,
+        _isEditorUnlocked,
+        _syncError
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         val courts = values[0] as List<CourtEntity>
@@ -135,10 +176,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val selectedCourtId = values[5] as Int
         val slotFilter = values[6] as SlotFilter
         val userRole = values[7] as UserRole
+        val isEditorUnlocked = values[8] as Boolean
+        val syncError = values[9] as String?
 
         ShuttleUiState(
             isLoading = false,
+            syncError = syncError,
+            lastSyncedMillis = System.currentTimeMillis(),
             userRole = userRole,
+            isEditorUnlocked = isEditorUnlocked,
             selectedDay = selectedDay,
             selectedCourtId = selectedCourtId,
             slotFilter = slotFilter,
@@ -154,22 +200,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     init {
-        PaymentReminderNotifier.ensureChannel(application)
+        repository.ensureNotificationChannel()
         viewModelScope.launch {
             repository.ensureDefaultCourts()
         }
     }
 
     fun selectUserRole(role: UserRole) {
+        if (role == UserRole.EDITOR && !_isEditorUnlocked.value) {
+            _showEditorPinDialog.value = true
+            return
+        }
+        applyUserRole(role)
+    }
+
+    fun dismissEditorPinDialog() {
+        _showEditorPinDialog.value = false
+    }
+
+    fun verifyEditorPinAndSwitch(pin: String): Boolean {
+        return if (pin.trim() == CourtScheduleRepository.EDITOR_PIN_DEFAULT) {
+            _isEditorUnlocked.value = true
+            _showEditorPinDialog.value = false
+            applyUserRole(UserRole.EDITOR)
+            true
+        } else {
+            _snackbarMessages.tryEmit("PIN Pengelola salah. Masukkan PIN: ${CourtScheduleRepository.EDITOR_PIN_DEFAULT}")
+            false
+        }
+    }
+
+    private fun applyUserRole(role: UserRole) {
         if (_userRole.value == role) return
         _userRole.value = role
         if (role == UserRole.RENTER && (_activeTab.value == AppTab.PAYMENTS || _activeTab.value == AppTab.COURTS)) {
             _activeTab.value = AppTab.SCHEDULE
         }
         val msg = if (role == UserRole.RENTER) {
-            "Mode Penyewa aktif: lihat jadwal, pesan lapangan, dan riwayat."
+            "Mode Penyewa aktif: jadwal tersinkron otomatis."
         } else {
-            "Mode Editor Website aktif: kelola tagihan, pembatalan, dan pengaturan lapangan."
+            "Mode Editor Website aktif: kelola tagihan, pembatalan, dan lapangan."
         }
         _snackbarMessages.tryEmit(msg)
     }
@@ -205,13 +275,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissConfirmationPrompt() {
         _confirmationPrompt.value = null
     }
-
-    fun calculateTotalPrice(
-        courts: List<CourtEntity>,
-        dayOfWeek: Int,
-        startHour: Int,
-        durationHours: Int
-    ): Long = courts.sumOf { repository.calculateBookingPrice(it, dayOfWeek, startHour, durationHours) }
 
     fun calculateSelectionsPrice(
         selections: List<CourtTimeSelection>,
@@ -252,6 +315,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             result.onSuccess { savedBookings ->
                 _bookingDraft.value = null
+                _syncError.value = null
                 val first = savedBookings.first()
                 val courtNames = savedBookings.joinToString(" & ") { it.courtName }
                 val totalCombinedPrice = savedBookings.sumOf { it.totalPrice }
@@ -272,81 +336,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     totalPrice = totalCombinedPrice,
                     whatsAppMessage = waMsg
                 )
-                _snackbarMessages.tryEmit("Jadwal $courtNames tersimpan! Silakan konfirmasi via WhatsApp.")
+                _snackbarMessages.tryEmit("Jadwal $courtNames tersimpan & disinkronkan otomatis!")
             }.onFailure { err ->
                 _snackbarMessages.tryEmit(err.message ?: "Gagal membuat pemesanan.")
             }
         }
     }
 
-    fun createManualBooking(
-        courts: List<CourtEntity>,
-        dayOfWeek: Int,
-        startHour: Int,
-        durationHours: Int,
-        customerName: String,
-        customerPhone: String,
-        paymentStatus: String,
-        paidAmount: Long,
-        reminderEnabled: Boolean,
-        notes: String
-    ) {
-        val selections = courts.map { CourtTimeSelection(it, startHour, durationHours) }
-        createManualCourtBookings(
-            selections = selections,
-            dayOfWeek = dayOfWeek,
-            customerName = customerName,
-            customerPhone = customerPhone,
-            paymentStatus = paymentStatus,
-            paidAmount = paidAmount,
-            reminderEnabled = reminderEnabled,
-            notes = notes
-        )
-    }
-
     fun markBookingPaid(bookingId: Long) {
         viewModelScope.launch {
             repository.markBookingPaid(bookingId)
-            _snackbarMessages.tryEmit("Pembayaran ditandai Lunas & pengingat dihentikan.")
+                .onSuccess {
+                    _snackbarMessages.tryEmit("Pembayaran ditandai Lunas & disinkronkan.")
+                }
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Gagal menandai lunas. Gunakan akun pengelola.")
+                }
         }
     }
 
     fun recordDownPayment(bookingId: Long, dpAmount: Long) {
         viewModelScope.launch {
             repository.recordDownPayment(bookingId, dpAmount)
-            _snackbarMessages.tryEmit("Catatan DP pembayaran berhasil diperbarui.")
+                .onSuccess {
+                    _snackbarMessages.tryEmit("Catatan DP berhasil diperbarui & disinkronkan.")
+                }
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Gagal memperbarui DP.")
+                }
         }
     }
 
     fun sendImmediateReminder(bookingId: Long) {
         viewModelScope.launch {
-            val shown = repository.sendImmediateReminder(bookingId)
-            val msg = if (shown) {
-                "Notifikasi pengingat pembayaran dikirim ke sistem."
-            } else {
-                "Pengingat dicatat. Aktifkan izin notifikasi agar tampil di status bar."
-            }
-            _snackbarMessages.tryEmit(msg)
+            repository.sendImmediateReminder(bookingId)
+                .onSuccess { shown ->
+                    val msg = if (shown) {
+                        "Notifikasi pengingat pembayaran dikirim ke sistem."
+                    } else {
+                        "Pengingat dicatat. Aktifkan izin notifikasi agar tampil di status bar."
+                    }
+                    _snackbarMessages.tryEmit(msg)
+                }
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Gagal mengirim pengingat.")
+                }
         }
     }
 
     fun cancelBooking(bookingId: Long) {
         viewModelScope.launch {
             repository.cancelBooking(bookingId)
-            _snackbarMessages.tryEmit("Pemesanan dibatalkan dan slot kembali tersedia.")
+                .onSuccess {
+                    _snackbarMessages.tryEmit("Pemesanan dibatalkan & jadwal tersinkron otomatis.")
+                }
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Hanya pembuat atau pengelola yang bisa membatalkan jadwal ini.")
+                }
         }
     }
 
     fun saveCourt(court: CourtEntity) {
         viewModelScope.launch {
             repository.saveCourt(court)
-            _snackbarMessages.tryEmit("Data ${court.name} tersimpan.")
+                .onSuccess {
+                    _snackbarMessages.tryEmit("Data ${court.name} tersimpan & disinkronkan.")
+                }
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Gagal menyimpan perubahan lapangan.")
+                }
         }
     }
 
     fun toggleCourtActive(court: CourtEntity) {
         viewModelScope.launch {
             repository.toggleCourtActive(court)
+                .onFailure { err ->
+                    _snackbarMessages.tryEmit(err.localizedMessage ?: "Gagal mengubah status lapangan.")
+                }
         }
     }
 

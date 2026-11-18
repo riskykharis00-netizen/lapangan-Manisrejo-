@@ -20,6 +20,10 @@
         </div>
       </div>
       <nav class="nav-links" aria-label="Navigasi Editor">
+        <button class="sync-pill" id="edSyncStatusBtn" type="button" title="Sinkron otomatis aktif">
+          <span class="sync-dot"></span>
+          <span id="edSyncStatusLabel">Sinkron Otomatis</span>
+        </button>
         <a class="nav-pill" href="index.html">← Halaman Orang Pesan</a>
         <button id="lockEditorBtn" type="button" class="nav-pill hidden">Kunci Editor</button>
       </nav>
@@ -29,11 +33,11 @@
   <main class="container">
     <section id="pinGateSection" class="card" style="max-width:460px;margin:24px auto;width:100%">
       <h1 class="section-title">Akses Editor Website</h1>
-      <p class="section-sub">Halaman ini khusus pengelola website &amp; admin lapangan. Masukkan PIN Editor (bawaan: <strong class="mono">1234</strong>).</p>
+      <p class="section-sub">Halaman ini khusus pengelola website &amp; admin lapangan. Masukkan PIN Editor (bawaan: <strong class="mono">00000</strong>).</p>
       <form id="pinLoginForm" class="form-grid">
         <div class="field">
           <label for="pinInput">PIN Pengelola</label>
-          <input id="pinInput" type="password" inputmode="numeric" placeholder="Masukkan PIN (default: 1234)" required />
+          <input id="pinInput" type="password" inputmode="numeric" placeholder="Masukkan PIN (default: 00000)" required />
         </div>
         <button type="submit" class="btn btn-primary">Masuk ke Editor Website</button>
       </form>
