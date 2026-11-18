@@ -1,11 +1,25 @@
 (function () {
   const STORAGE_KEY = "manisrejo_badminton_portal_v3";
+  const IDB_NAME = "ManisrejoBadmintonDB";
+  const IDB_VERSION = 1;
   const SYNC_CHANNEL_NAME = "manisrejo_badminton_sync_v1";
   const DEFAULT_EDITOR_PIN = "00000";
   const OPEN_HOUR = 8;
   const CLOSE_HOUR = 24;
   const RACKET_PRICE = 10000;
   const COCK_PRICE = 12000;
+  const ADMIN_EMAIL = "Riskykharis00@gmail.com";
+
+  // Provisioned Firebase config for optional cross-device Cloud Firestore database sync
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyC40vJWxGNQrTmFK6dj6afzkDjMNIYN7y4",
+    authDomain: "gen-lang-client-0641484956.firebaseapp.com",
+    projectId: "gen-lang-client-0641484956",
+    storageBucket: "gen-lang-client-0641484956.firebasestorage.app",
+    messagingSenderId: "990123663113",
+    appId: "1:990123663113:android:e69743e1ac47316fc97dd8",
+  };
+  const FIRESTORE_DATABASE_ID = "ai-studio-android-shuttlec-cbccc3c7-a99c-484f-9d0e-055fde3b0723";
 
   const DAYS = [
     { id: 1, name: "Senin", short: "Sen" },
@@ -25,13 +39,67 @@
 
   const syncListeners = new Set();
   const broadcast = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(SYNC_CHANNEL_NAME) : null;
-  const syncState = {
-    mode: "LOCAL_REALTIME",
+  const cloudState = {
+    initialized: false,
+    user: null,
+    mode: "LOCAL_REALTIME", // LOCAL_REALTIME | CLOUD_LIVE | CLOUD_ERROR
     lastSyncedAt: Date.now(),
+    errorMsg: "",
+    app: null,
+    auth: null,
+    db: null,
+    firestoreApi: null,
+    authApi: null,
   };
 
+  // --- Structured IndexedDB Database Mirror (ManisrejoBadmintonDB) ---
+  function openIndexedDb() {
+    return new Promise((resolve) => {
+      if (typeof indexedDB === "undefined") {
+        resolve(null);
+        return;
+      }
+      try {
+        const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+        req.onupgradeneeded = (ev) => {
+          const idb = ev.target.result;
+          if (!idb.objectStoreNames.contains("bookings_db")) {
+            idb.createObjectStore("bookings_db", { keyPath: "id" });
+          }
+          if (!idb.objectStoreNames.contains("history_db")) {
+            idb.createObjectStore("history_db", { keyPath: "id" });
+          }
+          if (!idb.objectStoreNames.contains("courts_db")) {
+            idb.createObjectStore("courts_db", { keyPath: "id" });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      } catch (_) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function syncToIndexedDb(storeData) {
+    const idb = await openIndexedDb();
+    if (!idb) return;
+    try {
+      const tx = idb.transaction(["bookings_db", "history_db", "courts_db"], "readwrite");
+      const bStore = tx.objectStore("bookings_db");
+      const hStore = tx.objectStore("history_db");
+      const cStore = tx.objectStore("courts_db");
+      bStore.clear();
+      hStore.clear();
+      cStore.clear();
+      (storeData.bookings || []).forEach((b) => bStore.put(b));
+      (storeData.history || []).forEach((h) => hStore.put(h));
+      (storeData.courts || []).forEach((c) => cStore.put(c));
+    } catch (_) {}
+  }
+
   function emitSyncEvent(reason, detail) {
-    syncState.lastSyncedAt = Date.now();
+    cloudState.lastSyncedAt = Date.now();
     syncListeners.forEach((cb) => {
       try {
         cb({ reason, detail, state: getSyncStatus() });
@@ -41,13 +109,15 @@
 
   function getSyncStatus() {
     return {
-      mode: syncState.mode,
-      lastSyncedAt: syncState.lastSyncedAt,
+      mode: cloudState.mode,
+      userEmail: cloudState.user ? cloudState.user.email : null,
+      lastSyncedAt: cloudState.lastSyncedAt,
+      errorMsg: cloudState.errorMsg,
     };
   }
 
   function triggerManualSync() {
-    emitSyncEvent("manual_sync", "Jadwal diperbarui");
+    emitSyncEvent("manual_sync", "Database diperbarui");
   }
 
   function formatTimeClock(ts) {
@@ -141,6 +211,8 @@
           durationHours: 2,
           customerName: "PB Manisrejo",
           customerPhone: "081234567890",
+          racketCount: 0,
+          cockCount: 0,
           totalPrice: 30000,
           paidAmount: 30000,
           paymentStatus: "PAID",
@@ -158,6 +230,8 @@
           durationHours: 2,
           customerName: "Tim Badminton RT 04",
           customerPhone: "085711223344",
+          racketCount: 0,
+          cockCount: 0,
           totalPrice: 30000,
           paidAmount: 10000,
           paymentStatus: "DP",
@@ -203,6 +277,7 @@
       if (!raw) {
         const fresh = createDefaultData();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+        syncToIndexedDb(fresh);
         return fresh;
       }
       const parsed = JSON.parse(raw);
@@ -219,6 +294,7 @@
   function saveStore(data, options = {}) {
     data.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    syncToIndexedDb(data);
     if (!options.silentBroadcast && broadcast) {
       try {
         broadcast.postMessage({ type: "STORE_UPDATED", updatedAt: data.updatedAt, source: options.source || "local" });
@@ -229,18 +305,18 @@
     }
   }
 
-  // Real-time local cross-tab / cross-page synchronization
+  // Real-time local cross-tab / cross-page synchronization (index.html <-> editor.html)
   if (typeof window !== "undefined") {
     if (broadcast) {
       broadcast.onmessage = (ev) => {
         if (ev && ev.data && ev.data.type === "STORE_UPDATED") {
-          emitSyncEvent("cross_tab", "Perubahan jadwal otomatis disinkronkan");
+          emitSyncEvent("cross_tab", "Database orang pesan otomatis disinkronkan");
         }
       };
     }
     window.addEventListener("storage", (ev) => {
       if (ev.key === STORAGE_KEY) {
-        emitSyncEvent("storage_event", "Jadwal terbaru dari tab lain disinkronkan");
+        emitSyncEvent("storage_event", "Data orang pesan terbaru disinkronkan ke Editor");
       }
     });
     document.addEventListener("visibilitychange", () => {
@@ -251,6 +327,324 @@
     window.addEventListener("focus", () => {
       emitSyncEvent("window_focus", "Refresh otomatis");
     });
+  }
+
+  // --- Optional Cloud Database Sync (Firestore; NEVER auto-redirects on page load) ---
+  async function initCloudSdk() {
+    if (cloudState.initialized) return true;
+    if (typeof window === "undefined" || window.location.protocol === "file:") return false;
+    try {
+      const [appMod, authMod, fsMod] = await Promise.all([
+        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js"),
+        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js"),
+        import("https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js"),
+      ]);
+      const app = appMod.getApps().length ? appMod.getApp() : appMod.initializeApp(FIREBASE_CONFIG);
+      const auth = authMod.getAuth(app);
+      const db = fsMod.getFirestore(app, FIRESTORE_DATABASE_ID);
+      cloudState.app = app;
+      cloudState.auth = auth;
+      cloudState.db = db;
+      cloudState.authApi = authMod;
+      cloudState.firestoreApi = fsMod;
+      cloudState.initialized = true;
+
+      authMod.onAuthStateChanged(auth, (user) => {
+        cloudState.user = user || null;
+        if (user) {
+          startCloudSnapshotSync();
+        } else {
+          stopCloudSnapshotSync();
+          cloudState.mode = "LOCAL_REALTIME";
+          emitSyncEvent("cloud_signed_out");
+        }
+      });
+      return true;
+    } catch (err) {
+      cloudState.errorMsg = err && err.message ? err.message : "Database Cloud offline";
+      cloudState.mode = "LOCAL_REALTIME";
+      emitSyncEvent("cloud_unavailable");
+      return false;
+    }
+  }
+
+  let unsubSlots = null;
+  let unsubPrivate = null;
+  let unsubCourts = null;
+  let latestPrivateMap = {};
+  let latestSlotsDocs = [];
+
+  function stopCloudSnapshotSync() {
+    if (typeof unsubSlots === "function") unsubSlots();
+    if (typeof unsubPrivate === "function") unsubPrivate();
+    if (typeof unsubCourts === "function") unsubCourts();
+    unsubSlots = null;
+    unsubPrivate = null;
+    unsubCourts = null;
+  }
+
+  function mergeAndEmitCloudSnapshots() {
+    const store = loadStore();
+    const remoteSlots = [];
+    const remoteHistory = [];
+
+    latestSlotsDocs.forEach((docItem) => {
+      const d = docItem.data;
+      const priv = latestPrivateMap[docItem.id] || null;
+      const createdMs = d.createdAt && typeof d.createdAt.toMillis === "function" ? d.createdAt.toMillis() : Date.now();
+      const customerName = (priv && priv.customerName) || d.displayName || "Penyewa";
+      const customerPhone = (priv && priv.customerPhone) || "";
+      const notes = (priv && priv.notes) || d.notes || "";
+
+      if (d.status === "AKTIF") {
+        remoteSlots.push({
+          id: docItem.id,
+          slotDocId: docItem.id,
+          userId: d.userId || "",
+          courtId: Number(d.courtId || 1),
+          courtName: d.courtName || "Lapangan A",
+          dayOfWeek: Number(d.dayOfWeek || 1),
+          bookingDate: d.bookingDate || getDateForDayOfWeek(Number(d.dayOfWeek || 1)),
+          startHour: Number(d.startHour || 18),
+          durationHours: Number(d.durationHours || 1),
+          customerName,
+          customerPhone,
+          racketCount: Number(d.racketCount || 0),
+          cockCount: Number(d.cockCount || 0),
+          totalPrice: Number(d.totalPrice || 0),
+          paidAmount: Number(d.paidAmount || 0),
+          paymentStatus: d.paymentStatus || "UNPAID",
+          reminderSentCount: Number(d.reminderSentCount || 0),
+          notes,
+          createdAt: createdMs,
+        });
+      }
+      remoteHistory.push({
+        id: docItem.id,
+        courtId: Number(d.courtId || 1),
+        courtName: d.courtName || "Lapangan A",
+        dayOfWeek: Number(d.dayOfWeek || 1),
+        bookingDate: d.bookingDate || getDateForDayOfWeek(Number(d.dayOfWeek || 1)),
+        startHour: Number(d.startHour || 18),
+        durationHours: Number(d.durationHours || 1),
+        customerName,
+        totalPrice: Number(d.totalPrice || 0),
+        notes,
+        status: d.status === "DIBATALKAN" ? "CANCELLED" : "CONFIRMED",
+        createdAt: createdMs,
+      });
+    });
+
+    store.bookings = remoteSlots;
+    remoteHistory.sort((a, b) => b.createdAt - a.createdAt);
+    store.history = remoteHistory;
+    cloudState.mode = "CLOUD_LIVE";
+    saveStore(store, { source: "cloud_snapshot", silentEmit: false });
+  }
+
+  function startCloudSnapshotSync() {
+    if (!cloudState.db || !cloudState.firestoreApi || !cloudState.user) return;
+    stopCloudSnapshotSync();
+    const { collection, collectionGroup, query, where, onSnapshot } = cloudState.firestoreApi;
+    cloudState.mode = "CLOUD_LIVE";
+    cloudState.errorMsg = "";
+
+    const isAdmin = cloudState.user.emailVerified && cloudState.user.email === ADMIN_EMAIL;
+    const privQuery = isAdmin
+      ? query(collectionGroup(cloudState.db, "bookings"))
+      : collection(cloudState.db, "users", cloudState.user.uid, "bookings");
+
+    unsubPrivate = onSnapshot(
+      privQuery,
+      (snapshot) => {
+        const map = {};
+        snapshot.forEach((docSnap) => {
+          const d = docSnap.data();
+          if (d && d.slotId) {
+            map[d.slotId] = d;
+          }
+        });
+        latestPrivateMap = map;
+        if (latestSlotsDocs.length > 0) mergeAndEmitCloudSnapshots();
+      },
+      () => {}
+    );
+
+    const slotsQuery = query(collection(cloudState.db, "schedule_slots"), where("venueId", "==", "manisrejo"));
+    unsubSlots = onSnapshot(
+      slotsQuery,
+      (snapshot) => {
+        const docs = [];
+        snapshot.forEach((docSnap) => {
+          docs.push({ id: docSnap.id, data: docSnap.data() });
+        });
+        latestSlotsDocs = docs;
+        mergeAndEmitCloudSnapshots();
+      },
+      (err) => {
+        cloudState.mode = "LOCAL_REALTIME";
+        cloudState.errorMsg = err && err.message ? err.message : "Sinkron cloud terhenti";
+        emitSyncEvent("cloud_error", cloudState.errorMsg);
+      }
+    );
+
+    const courtsQuery = query(collection(cloudState.db, "courts"), where("venueId", "==", "manisrejo"));
+    unsubCourts = onSnapshot(courtsQuery, (snapshot) => {
+      if (snapshot.empty) return;
+      const store = loadStore();
+      const syncedCourts = [];
+      snapshot.forEach((docSnap) => {
+        const d = docSnap.data();
+        syncedCourts.push({
+          id: Number(d.courtNumber || 1),
+          docId: docSnap.id,
+          name: d.name || `Lapangan ${d.courtNumber || 1}`,
+          rate: Number(d.hourlyRateRegular || 15000),
+          active: d.active !== false,
+          note: d.surfaceType || "",
+        });
+      });
+      syncedCourts.sort((a, b) => a.id - b.id);
+      if (syncedCourts.length > 0) {
+        store.courts = syncedCourts;
+        saveStore(store, { source: "cloud_courts" });
+      }
+    });
+  }
+
+  async function pushBookingsToCloud(createdBookings) {
+    if (!cloudState.user || !cloudState.db || !cloudState.firestoreApi) return;
+    const { doc, writeBatch, serverTimestamp } = cloudState.firestoreApi;
+    const uid = cloudState.user.uid;
+    const batch = writeBatch(cloudState.db);
+    createdBookings.forEach((b, idx) => {
+      const slotId = `web_${b.id}_${idx}`;
+      b.slotDocId = slotId;
+      b.userId = uid;
+      batch.set(doc(cloudState.db, "schedule_slots", slotId), {
+        venueId: "manisrejo",
+        userId: uid,
+        courtId: Number(b.courtId),
+        courtName: String(b.courtName).slice(0, 50),
+        dayOfWeek: Number(b.dayOfWeek),
+        bookingDate: String(b.bookingDate || "").slice(0, 20),
+        startHour: Number(b.startHour),
+        durationHours: Number(b.durationHours),
+        displayName: String(b.customerName).slice(0, 60),
+        totalPrice: Number(b.totalPrice),
+        paidAmount: Number(b.paidAmount || 0),
+        paymentStatus: b.paymentStatus || "UNPAID",
+        racketCount: Number(b.racketCount || 0),
+        cockCount: Number(b.cockCount || 0),
+        reminderEnabled: b.paymentStatus !== "PAID",
+        reminderSentCount: 0,
+        notes: String(b.notes || "").slice(0, 250),
+        status: "AKTIF",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(cloudState.db, "users", uid, "bookings", slotId), {
+        userId: uid,
+        slotId,
+        customerName: String(b.customerName).slice(0, 60),
+        customerPhone: String(b.customerPhone || "").slice(0, 30),
+        notes: String(b.notes || "").slice(0, 250),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
+    await batch.commit();
+  }
+
+  async function updateCloudSlot(booking, patchFields) {
+    if (!cloudState.user || !cloudState.db || !cloudState.firestoreApi) return;
+    const docId = booking.slotDocId || (typeof booking.id === "string" ? booking.id : null);
+    if (!docId) return;
+    const { doc, updateDoc, serverTimestamp } = cloudState.firestoreApi;
+    try {
+      await updateDoc(doc(cloudState.db, "schedule_slots", docId), {
+        ...patchFields,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      cloudState.errorMsg = err && err.message ? err.message : "Gagal update ke database cloud";
+      emitSyncEvent("cloud_error", cloudState.errorMsg);
+    }
+  }
+
+  async function connectCloudSync() {
+    const ok = await initCloudSdk();
+    if (!ok || !cloudState.authApi || !cloudState.auth) {
+      showToast("Database lokal & sinkron antar-tab aktif. Buka via HTTPS untuk sinkron Cloud.");
+      return false;
+    }
+    try {
+      const provider = new cloudState.authApi.GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      await cloudState.authApi.signInWithPopup(cloudState.auth, provider);
+      showToast("Database Cloud aktif! Data orang pesan tersinkron real-time ke Editor.");
+      return true;
+    } catch (err) {
+      cloudState.errorMsg = err && err.message ? err.message : "Koneksi Cloud dibatalkan";
+      emitSyncEvent("cloud_error", cloudState.errorMsg);
+      showToast("Database lokal tetap aktif (" + cloudState.errorMsg + ")");
+      return false;
+    }
+  }
+
+  async function disconnectCloudSync() {
+    stopCloudSnapshotSync();
+    if (cloudState.authApi && cloudState.auth) {
+      await cloudState.authApi.signOut(cloudState.auth);
+    }
+    cloudState.user = null;
+    cloudState.mode = "LOCAL_REALTIME";
+    emitSyncEvent("cloud_signed_out");
+    showToast("Database Cloud diputuskan. Database lokal tetap aktif.");
+  }
+
+  function exportBookingsCsv(bookings) {
+    const headers = [
+      "No",
+      "Nama Penyewa",
+      "No WhatsApp",
+      "Lapangan",
+      "Hari & Tanggal",
+      "Jam Main",
+      "Durasi (Jam)",
+      "Sewa Raket",
+      "Beli Cock",
+      "Total Harga (Rp)",
+      "Dibayar (Rp)",
+      "Sisa Tagihan (Rp)",
+      "Status Pembayaran",
+      "Catatan",
+      "Waktu Pesan"
+    ];
+    const escapeCell = (val) => `"${String(val ?? "").replace(/"/g, '""')}"`;
+    const rows = (bookings || []).map((b, idx) => {
+      const remaining = Math.max(Number(b.totalPrice || 0) - Number(b.paidAmount || 0), 0);
+      const statusLabel = b.paymentStatus === "PAID" ? "Lunas" : b.paymentStatus === "DP" ? "DP Sebagian" : "Belum Bayar";
+      const createdText = b.createdAt ? new Date(b.createdAt).toLocaleString("id-ID") : "-";
+      return [
+        idx + 1,
+        b.customerName || "",
+        b.customerPhone || "-",
+        b.courtName || "",
+        formatDayAndDate(b.dayOfWeek, b.bookingDate),
+        formatRange(b.startHour, b.durationHours),
+        b.durationHours || 1,
+        b.racketCount || 0,
+        b.cockCount || 0,
+        b.totalPrice || 0,
+        b.paidAmount || 0,
+        remaining,
+        statusLabel,
+        b.notes || "",
+        createdText
+      ].map(escapeCell).join(",");
+    });
+    return [headers.map(escapeCell).join(","), ...rows].join("\n");
   }
 
   function formatHour(hour) {
@@ -436,6 +830,9 @@
     });
 
     saveStore(store, { source: "booking_created" });
+    if (cloudState.user) {
+      pushBookingsToCloud(createdBookings).catch(() => {});
+    }
     return { bookings: createdBookings };
   }
 
@@ -470,6 +867,9 @@
     });
   }
 
+  // Passive background init (NO auto-redirect on load; website opens directly)
+  initCloudSdk().catch(() => {});
+
   window.ManisrejoPortal = {
     OPEN_HOUR,
     CLOSE_HOUR,
@@ -490,6 +890,10 @@
     },
     getSyncStatus,
     triggerManualSync,
+    connectCloudSync,
+    disconnectCloudSync,
+    updateCloudSlot,
+    exportBookingsCsv,
     formatTimeClock,
     formatHour,
     formatRange,

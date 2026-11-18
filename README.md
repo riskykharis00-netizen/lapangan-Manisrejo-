@@ -15,9 +15,9 @@ Codingan website dipecah rapi **per bagian file** dan dipisahkan antara halaman 
 ├── css/
 │   └── styles.css      # [Bagian 3] Tampilan & layout website (Emerald & Lime)
 └── js/
-    ├── storage.js      # [Bagian 4] Penyimpanan data, sinkron otomatis antar-tab & validasi bentrok
+    ├── storage.js      # [Bagian 4] Database IndexedDB (ManisrejoBadmintonDB), sinkron real-time & opsional Cloud Firestore
     ├── renter.js       # [Bagian 5] Logika jadwal, pesan 1/2 lapangan & riwayat penyewa
-    └── editor.js       # [Bagian 6] Logika PIN (00000), tagihan Lunas/DP, pengingat WA & editor lapangan
+    └── editor.js       # [Bagian 6] Database Orang Pesan (cari, filter, export CSV), PIN (00000), tagihan & pengingat WA
 ```
 
 ---

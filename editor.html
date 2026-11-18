@@ -59,6 +59,67 @@
         </div>
       </section>
 
+      <section class="card" id="editorDatabaseSection">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px">
+          <div>
+            <h2 class="section-title" style="margin:0">Database Orang Pesan (Sinkron Real-Time)</h2>
+            <p class="section-sub" style="margin:2px 0 0">Setiap pesanan dari halaman penyewa otomatis masuk dan tersinkron ke tabel database ini.</p>
+          </div>
+          <div class="chip-row">
+            <button type="button" id="edConnectCloudDbBtn" class="btn btn-outline">Hubungkan Cloud DB</button>
+            <button type="button" id="exportCsvBtn" class="btn btn-primary">Unduh CSV Database</button>
+          </div>
+        </div>
+
+        <div class="db-toolbar">
+          <div class="field">
+            <label for="dbSearchInput">Cari Pemesan / No. WA / Lapangan</label>
+            <input id="dbSearchInput" type="search" placeholder="Ketik nama pemesan, 08xx, atau Lapangan A..." />
+          </div>
+          <div class="field">
+            <label for="dbStatusFilter">Filter Status Bayar</label>
+            <select id="dbStatusFilter">
+              <option value="ALL">Semua Status</option>
+              <option value="PAID">Lunas</option>
+              <option value="DP">DP Sebagian</option>
+              <option value="UNPAID">Belum Bayar</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="dbDayFilter">Filter Hari</label>
+            <select id="dbDayFilter">
+              <option value="0">Semua Hari (Sen–Min)</option>
+              <option value="1">Senin</option>
+              <option value="2">Selasa</option>
+              <option value="3">Rabu</option>
+              <option value="4">Kamis</option>
+              <option value="5">Jumat</option>
+              <option value="6">Sabtu</option>
+              <option value="7">Minggu</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="db-table-wrap">
+          <table class="db-table" aria-label="Database Orang Pesan">
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Nama Penyewa &amp; WA</th>
+                <th>Lapangan</th>
+                <th>Hari &amp; Tanggal</th>
+                <th>Jam Main</th>
+                <th>Tambahan &amp; Catatan</th>
+                <th>Total &amp; Sisa</th>
+                <th>Status</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="edDatabaseTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="card">
         <h2 class="section-title">1. Tambah Pemesanan Admin</h2>
         <p class="section-sub">Catat jadwal masuk dan langsung atur status pembayarannya.</p>

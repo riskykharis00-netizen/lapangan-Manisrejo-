@@ -170,6 +170,9 @@
           b.paymentStatus = "PAID";
           b.paidAmount = b.totalPrice;
           P.saveStore(store, { source: "editor_paid" });
+          if (typeof P.updateCloudSlot === "function") {
+            P.updateCloudSlot(b, { paymentStatus: "PAID", paidAmount: b.totalPrice, reminderEnabled: false });
+          }
           P.showToast(`${b.customerName} ditandai Lunas.`);
           renderAll();
         };
@@ -180,6 +183,9 @@
         remindBtn.onclick = () => {
           b.reminderSentCount = (b.reminderSentCount || 0) + 1;
           P.saveStore(store, { source: "editor_remind" });
+          if (typeof P.updateCloudSlot === "function") {
+            P.updateCloudSlot(b, { reminderSentCount: b.reminderSentCount });
+          }
           const msg = `Halo ${b.customerName}, pengingat pembayaran sewa ${b.courtName} (${dayDateText}, ${P.formatRange(b.startHour, b.durationHours)}) sebesar ${P.formatRupiah(remaining)}. Terima kasih — ${store.venue.name}.`;
           P.showToast(`Pengingat ke-${b.reminderSentCount} dicatat!`);
           if (b.customerPhone) window.open(P.buildWhatsAppUrl(b.customerPhone, msg), "_blank", "noopener");
@@ -203,11 +209,127 @@
           createdAt: Date.now(),
         });
         P.saveStore(store, { source: "editor_cancel" });
+        if (typeof P.updateCloudSlot === "function") {
+          P.updateCloudSlot(b, { status: "DIBATALKAN" });
+        }
         P.showToast(`Jadwal ${b.courtName} milik ${b.customerName} dibatalkan.`);
         renderAll();
       };
 
       listEl.appendChild(card);
+    });
+  }
+
+  function getFilteredDatabaseBookings() {
+    const q = (document.getElementById("dbSearchInput")?.value || "").trim().toLowerCase();
+    const statusF = document.getElementById("dbStatusFilter")?.value || "ALL";
+    const dayF = Number(document.getElementById("dbDayFilter")?.value || 0);
+
+    return [...store.bookings]
+      .filter((b) => {
+        if (statusF !== "ALL" && b.paymentStatus !== statusF) return false;
+        if (dayF !== 0 && Number(b.dayOfWeek) !== dayF) return false;
+        if (q) {
+          const hay = `${b.customerName || ""} ${b.customerPhone || ""} ${b.courtName || ""} ${b.notes || ""}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+  }
+
+  function renderDatabaseTable() {
+    const tbody = document.getElementById("edDatabaseTableBody");
+    if (!tbody) return;
+    const rows = getFilteredDatabaseBookings();
+    tbody.innerHTML = "";
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:18px">Belum ada data orang pesan yang cocok.</td></tr>`;
+      return;
+    }
+
+    rows.forEach((b, idx) => {
+      const remaining = Math.max(Number(b.totalPrice || 0) - Number(b.paidAmount || 0), 0);
+      const statusClass = b.paymentStatus === "PAID" ? "status-paid" : "status-pending";
+      const statusLabel = b.paymentStatus === "PAID" ? "Lunas" : b.paymentStatus === "DP" ? "DP Sebagian" : "Belum Bayar";
+      const dayDateText = P.formatDayAndDate(b.dayOfWeek, b.bookingDate);
+      const extras = [
+        b.racketCount > 0 ? `Raket ${b.racketCount}x` : "",
+        b.cockCount > 0 ? `Cock ${b.cockCount}x` : "",
+        b.notes || ""
+      ].filter(Boolean).join(" • ") || "-";
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${idx + 1}</td>
+        <td>
+          <div style="font-weight:800">${b.customerName}</div>
+          <div class="mono" style="font-size:12px;color:var(--muted)">${b.customerPhone || "-"}</div>
+        </td>
+        <td><strong>${b.courtName}</strong></td>
+        <td>${dayDateText}</td>
+        <td class="mono" style="white-space:nowrap">${P.formatRange(b.startHour, b.durationHours)}<br/><span style="font-size:11px;color:var(--muted)">${b.durationHours} jam</span></td>
+        <td style="font-size:12px;max-width:190px">${extras}</td>
+        <td class="mono" style="white-space:nowrap">
+          <strong>${P.formatRupiah(b.totalPrice)}</strong>
+          ${remaining > 0 ? `<div style="font-size:11px;color:var(--pending-fg)">Sisa: ${P.formatRupiah(remaining)}</div>` : ""}
+        </td>
+        <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
+        <td>
+          <div class="chip-row">
+            ${b.paymentStatus !== "PAID" ? `<button type="button" class="btn btn-primary" style="padding:6px 10px;min-height:36px;font-size:12px" data-db-act="paid">Lunas</button>` : ""}
+            ${b.customerPhone ? `<button type="button" class="btn btn-outline" style="padding:6px 10px;min-height:36px;font-size:12px" data-db-act="wa">WA</button>` : ""}
+            <button type="button" class="btn btn-danger" style="padding:6px 10px;min-height:36px;font-size:12px" data-db-act="del">Hapus</button>
+          </div>
+        </td>
+      `;
+
+      const dbPaid = tr.querySelector('[data-db-act="paid"]');
+      if (dbPaid) {
+        dbPaid.onclick = () => {
+          b.paymentStatus = "PAID";
+          b.paidAmount = b.totalPrice;
+          P.saveStore(store, { source: "editor_db_paid" });
+          if (typeof P.updateCloudSlot === "function") {
+            P.updateCloudSlot(b, { paymentStatus: "PAID", paidAmount: b.totalPrice, reminderEnabled: false });
+          }
+          P.showToast(`${b.customerName} ditandai Lunas.`);
+          renderAll();
+        };
+      }
+
+      const dbWa = tr.querySelector('[data-db-act="wa"]');
+      if (dbWa) {
+        dbWa.onclick = () => {
+          const msg = `Halo ${b.customerName}, konfirmasi jadwal ${b.courtName} (${dayDateText}, ${P.formatRange(b.startHour, b.durationHours)}). Total: ${P.formatRupiah(b.totalPrice)}. — ${store.venue.name}`;
+          window.open(P.buildWhatsAppUrl(b.customerPhone, msg), "_blank", "noopener");
+        };
+      }
+
+      tr.querySelector('[data-db-act="del"]').onclick = () => {
+        store.bookings = store.bookings.filter((item) => item.id !== b.id);
+        store.history.unshift({
+          id: Date.now(),
+          courtId: b.courtId,
+          courtName: b.courtName,
+          dayOfWeek: b.dayOfWeek,
+          bookingDate: b.bookingDate,
+          startHour: b.startHour,
+          durationHours: b.durationHours,
+          customerName: b.customerName,
+          totalPrice: b.totalPrice,
+          status: "CANCELLED",
+          createdAt: Date.now(),
+        });
+        P.saveStore(store, { source: "editor_db_delete" });
+        if (typeof P.updateCloudSlot === "function") {
+          P.updateCloudSlot(b, { status: "DIBATALKAN" });
+        }
+        P.showToast(`Data ${b.customerName} (${b.courtName}) dihapus dari database aktif.`);
+        renderAll();
+      };
+
+      tbody.appendChild(tr);
     });
   }
 
@@ -257,6 +379,7 @@
   function renderAll() {
     store = P.loadStore();
     renderSummary();
+    renderDatabaseTable();
     renderAdminFormSelects();
     renderBookings();
     renderCourts();
@@ -340,29 +463,64 @@
     renderAll();
   };
 
+  ["dbSearchInput", "dbStatusFilter", "dbDayFilter"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener(id === "dbSearchInput" ? "input" : "change", renderDatabaseTable);
+    }
+  });
+
+  const exportCsvBtn = document.getElementById("exportCsvBtn");
+  if (exportCsvBtn) {
+    exportCsvBtn.onclick = () => {
+      store = P.loadStore();
+      const csv = P.exportBookingsCsv(getFilteredDatabaseBookings());
+      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "database-orang-pesan-manisrejo.csv";
+      a.click();
+      P.showToast("Database orang pesan berhasil diunduh (.csv).");
+    };
+  }
+
   function updateEditorSyncBadge() {
     const btn = document.getElementById("edSyncStatusBtn");
     const labelEl = document.getElementById("edSyncStatusLabel");
+    const cloudBtn = document.getElementById("edConnectCloudDbBtn");
     if (!btn || !labelEl || typeof P.getSyncStatus !== "function") return;
     const st = P.getSyncStatus();
     const clock = P.formatTimeClock(st.lastSyncedAt);
-    btn.classList.remove("cloud");
-    btn.title = "Sinkron Otomatis antar-tab aktif — klik untuk segarkan jadwal";
-    labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+    if (st.mode === "CLOUD_LIVE") {
+      btn.classList.add("cloud");
+      btn.title = `Database Cloud aktif (${st.userEmail || "Firestore"}) — klik untuk putuskan`;
+      labelEl.textContent = `Cloud DB Aktif • ${clock}`;
+      if (cloudBtn) cloudBtn.textContent = "Putuskan Cloud DB";
+    } else {
+      btn.classList.remove("cloud");
+      btn.title = "Database Lokal Real-Time aktif — klik untuk hubungkan Cloud DB lintas perangkat";
+      labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+      if (cloudBtn) cloudBtn.textContent = "Hubungkan Cloud DB";
+    }
+  }
+
+  async function toggleEditorCloudSync() {
+    const st = P.getSyncStatus();
+    if (st.mode === "CLOUD_LIVE" && typeof P.disconnectCloudSync === "function") {
+      await P.disconnectCloudSync();
+    } else if (typeof P.connectCloudSync === "function") {
+      await P.connectCloudSync();
+    }
+    updateEditorSyncBadge();
   }
 
   const edSyncBtn = document.getElementById("edSyncStatusBtn");
   if (edSyncBtn) {
-    edSyncBtn.onclick = () => {
-      if (typeof P.triggerManualSync === "function") {
-        P.triggerManualSync();
-      }
-      if (sessionStorage.getItem(SESSION_KEY) === "1") {
-        renderAll();
-      }
-      updateEditorSyncBadge();
-      P.showToast("Jadwal disegarkan (Sinkron Otomatis aktif).");
-    };
+    edSyncBtn.onclick = toggleEditorCloudSync;
+  }
+  const edCloudBtn = document.getElementById("edConnectCloudDbBtn");
+  if (edCloudBtn) {
+    edCloudBtn.onclick = toggleEditorCloudSync;
   }
 
   if (typeof P.onSync === "function") {
@@ -372,6 +530,7 @@
       if (sessionStorage.getItem(SESSION_KEY) === "1") {
         store = P.loadStore();
         renderSummary();
+        renderDatabaseTable();
         renderBookings();
         const activeEl = document.activeElement;
         const editingForm =
@@ -382,8 +541,8 @@
           renderCourts();
           renderVenueForm();
         }
-        if (ev.reason === "cross_tab" || ev.reason === "storage_event") {
-          P.showToast("Pesanan / jadwal baru otomatis disinkronkan!");
+        if (ev.reason === "cross_tab" || ev.reason === "storage_event" || ev.reason === "cloud_snapshot") {
+          P.showToast("Data orang pesan baru otomatis disinkronkan ke Editor!");
         }
       }
     });

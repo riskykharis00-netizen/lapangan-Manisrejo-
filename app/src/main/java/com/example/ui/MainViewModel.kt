@@ -10,7 +10,9 @@ import com.example.data.local.ReminderLogEntity
 import com.example.data.repository.CourtScheduleRepository
 import com.example.data.repository.CourtTimeSelection
 import com.example.util.ScheduleFormatters
+import com.google.firebase.firestore.FirebaseFirestoreException
 import java.util.Calendar
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -91,7 +93,9 @@ data class ShuttleUiState(
 }
 
 class MainViewModel(
-    private val repository: CourtScheduleRepository
+    private val repository: CourtScheduleRepository,
+    val currentUserId: String,
+    val userEmail: String?
 ) : ViewModel() {
 
     private val _userRole = MutableStateFlow(UserRole.RENTER)
@@ -116,23 +120,35 @@ class MainViewModel(
     private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
+    private fun unwrapFirestoreError(error: Throwable): Throwable {
+        val firestoreError = generateSequence(error) { it.cause }
+            .filterIsInstance<FirebaseFirestoreException>()
+            .firstOrNull()
+        if (firestoreError == null && error is CancellationException) throw error
+        return firestoreError ?: error
+    }
+
     private val safeCourtsFlow = repository.courts.catch { error ->
-        _syncError.value = error.localizedMessage ?: "Gagal memuat data lapangan."
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan data lapangan."
         emit(emptyList())
     }
 
     private val safeBookingsFlow = repository.bookings.catch { error ->
-        _syncError.value = error.localizedMessage ?: "Gagal memuat jadwal."
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan jadwal."
         emit(emptyList())
     }
 
     private val safeHistoryFlow = repository.bookingHistory.catch { error ->
-        _syncError.value = error.localizedMessage ?: "Gagal memuat riwayat."
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan riwayat."
         emit(emptyList())
     }
 
     private val safeRemindersFlow = repository.reminderLogs.catch { error ->
-        _syncError.value = error.localizedMessage ?: "Gagal memuat log pengingat."
+        val root = unwrapFirestoreError(error)
+        _syncError.value = root.localizedMessage ?: "Gagal menyinkronkan log pengingat."
         emit(emptyList())
     }
 

@@ -194,6 +194,11 @@ service cloud.firestore {
       allow delete: if isSignedIn() && (request.auth.uid == userId || isAdmin()) && isValidId(bookingId);
     }
 
+    match /{path=**}/bookings/{bookingId} {
+      // Admin collectionGroup read to sync complete renter database (including phone numbers) to Editor
+      allow list: if isSignedIn() && isAdmin();
+    }
+
     match /users/{userId}/reminder_logs/{logId} {
       allow get, list: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 

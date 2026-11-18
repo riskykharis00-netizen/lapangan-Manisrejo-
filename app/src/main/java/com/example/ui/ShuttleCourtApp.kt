@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.SportsTennis
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -43,6 +44,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -89,18 +91,26 @@ import com.example.ui.theme.ShuttleLimeBright
 import com.example.ui.theme.StatusPaidBg
 import com.example.ui.theme.StatusPaidFg
 import com.example.util.ScheduleFormatters
+import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
 @Composable
-fun ShuttleCourtApp() {
+fun ShuttleCourtApp(
+    currentUserId: String,
+    userEmail: String? = null,
+    onSignOutClick: () -> Unit = {}
+) {
     val viewModel: MainViewModel = viewModel(
+        key = currentUserId,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val repository = CourtScheduleRepository(app.applicationContext)
-                MainViewModel(repository)
+                val databaseId = app.getString(R.string.firestore_database_id)
+                val firestore = FirebaseFirestore.getInstance(databaseId)
+                val repository = CourtScheduleRepository(app.applicationContext, firestore, currentUserId)
+                MainViewModel(repository, currentUserId, userEmail)
             }
         }
     )
@@ -273,6 +283,18 @@ fun ShuttleCourtApp() {
                                         userRole = uiState.userRole,
                                         onSelectRole = viewModel::selectUserRole
                                     )
+                                    IconButton(
+                                        onClick = onSignOutClick,
+                                        modifier = Modifier
+                                            .size(48.dp)
+                                            .testTag("sign_out_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Logout,
+                                            contentDescription = "Keluar akun Google",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
 

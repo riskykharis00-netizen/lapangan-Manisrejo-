@@ -632,3 +632,59 @@ body {
   z-index: 80;
   max-width: calc(100vw - 44px);
 }
+
+.db-toolbar {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.5fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 720px) {
+  .db-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
+.db-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.db-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 760px;
+}
+
+.db-table thead th {
+  background: var(--surface-soft);
+  color: var(--emerald-dark);
+  text-align: left;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.db-table tbody td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.db-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.db-table tbody tr:hover {
+  background: var(--surface-soft);
+}
+

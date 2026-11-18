@@ -578,19 +578,27 @@
     if (!btn || !labelEl || typeof P.getSyncStatus !== "function") return;
     const st = P.getSyncStatus();
     const clock = P.formatTimeClock(st.lastSyncedAt);
-    btn.classList.remove("cloud");
-    btn.title = "Sinkron Otomatis aktif — klik untuk menyegarkan jadwal";
-    labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+    if (st.mode === "CLOUD_LIVE") {
+      btn.classList.add("cloud");
+      btn.title = `Database Cloud aktif (${st.userEmail || "Firestore"}) — klik untuk putuskan`;
+      labelEl.textContent = `Cloud DB Aktif • ${clock}`;
+    } else {
+      btn.classList.remove("cloud");
+      btn.title = "Database Lokal Real-Time aktif — klik untuk hubungkan Cloud DB";
+      labelEl.textContent = `Sinkron Otomatis • ${clock}`;
+    }
   }
 
   const syncStatusBtnEl = document.getElementById("syncStatusBtn");
   if (syncStatusBtnEl) {
-    syncStatusBtnEl.onclick = () => {
-      if (typeof P.triggerManualSync === "function") {
-        P.triggerManualSync();
+    syncStatusBtnEl.onclick = async () => {
+      const st = P.getSyncStatus();
+      if (st.mode === "CLOUD_LIVE" && typeof P.disconnectCloudSync === "function") {
+        await P.disconnectCloudSync();
+      } else if (typeof P.connectCloudSync === "function") {
+        await P.connectCloudSync();
       }
-      refreshViewOnSync("manual");
-      P.showToast("Jadwal diperbarui (Sinkron Otomatis aktif).");
+      updateSyncBadge();
     };
   }
 
@@ -612,7 +620,7 @@
       renderHistory();
     }
     updateSyncBadge();
-    if (reason === "cross_tab" || reason === "storage_event") {
+    if (reason === "cross_tab" || reason === "storage_event" || reason === "cloud_snapshot") {
       P.showToast("Jadwal terbaru otomatis diperbarui.");
     }
   }

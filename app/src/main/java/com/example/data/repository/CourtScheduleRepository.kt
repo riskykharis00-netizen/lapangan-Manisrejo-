@@ -1,7 +1,6 @@
 package com.example.data.repository
 
 import android.content.Context
-import com.example.data.local.AppDatabase
 import com.example.data.local.BookingEntity
 import com.example.data.local.BookingHistoryEntity
 import com.example.data.local.BookingHistoryStatus
@@ -9,10 +8,32 @@ import com.example.data.local.CourtEntity
 import com.example.data.local.PaymentStatus
 import com.example.data.local.ReminderLogEntity
 import com.example.data.local.ReminderLogStatus
+import com.example.data.remote.FirestoreCourt
+import com.example.data.remote.FirestorePrivateBooking
+import com.example.data.remote.FirestoreReminderLog
+import com.example.data.remote.FirestoreScheduleSlot
+import com.example.data.remote.OperationType
+import com.example.data.remote.handleFirestoreError
 import com.example.notifications.PaymentReminderNotifier
 import com.example.util.ScheduleFormatters
+import com.google.firebase.Firebase
+import com.google.firebase.auth.auth
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.snapshots
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.tasks.await
 
 data class CourtTimeSelection(
     val court: CourtEntity,
@@ -20,18 +41,37 @@ data class CourtTimeSelection(
     val durationHours: Int
 )
 
-class CourtScheduleRepository(private val context: Context) {
+class CourtScheduleRepository(
+    private val context: Context,
+    private val firestore: FirebaseFirestore,
+    private val currentUserId: String
+) {
+    private val auth = Firebase.auth
+    private val slotDocIdByNumericId = ConcurrentHashMap<Long, String>()
+    private val courtDocIdByNumericId = ConcurrentHashMap<Int, String>()
 
-    private val db = AppDatabase.getInstance(context)
-    private val courtDao = db.courtDao()
-    private val bookingDao = db.bookingDao()
-    private val reminderLogDao = db.reminderLogDao()
-    private val bookingHistoryDao = db.bookingHistoryDao()
+    private fun requireUserId(): String {
+        val uid = auth.currentUser?.uid
+        if (uid.isNullOrBlank() || uid != currentUserId) {
+            throw IllegalStateException("Sesi Google tidak aktif. Silakan masuk ulang.")
+        }
+        return uid
+    }
 
-    val courts: Flow<List<CourtEntity>> = courtDao.observeAllCourts()
-    val bookings: Flow<List<BookingEntity>> = bookingDao.observeAllBookings()
-    val reminderLogs: Flow<List<ReminderLogEntity>> = reminderLogDao.observeAllLogs()
-    val bookingHistory: Flow<List<BookingHistoryEntity>> = bookingHistoryDao.observeAllHistory()
+    private fun isCurrentUserAdmin(): Boolean {
+        val user = auth.currentUser ?: return false
+        return user.isEmailVerified && user.email == ADMIN_EMAIL
+    }
+
+    private fun stableNumericId(docId: String): Long {
+        var hash = -0x340d631b7bdddcdbL
+        for (ch in docId) {
+            hash = hash xor ch.code.toLong()
+            hash *= 0x100000001b3L
+        }
+        val positive = hash and Long.MAX_VALUE
+        return if (positive == 0L) 1L else positive
+    }
 
     fun ensureNotificationChannel() {
         PaymentReminderNotifier.ensureChannel(context)
@@ -39,6 +79,7 @@ class CourtScheduleRepository(private val context: Context) {
 
     private fun defaultCourts(): List<CourtEntity> = listOf(
         CourtEntity(
+            id = 1,
             name = "Lapangan A",
             surfaceType = "",
             hourlyRateRegular = ScheduleFormatters.DEFAULT_HOURLY_RATE,
@@ -47,6 +88,7 @@ class CourtScheduleRepository(private val context: Context) {
             isActive = true
         ),
         CourtEntity(
+            id = 2,
             name = "Lapangan B",
             surfaceType = "",
             hourlyRateRegular = ScheduleFormatters.DEFAULT_HOURLY_RATE,
@@ -56,15 +98,242 @@ class CourtScheduleRepository(private val context: Context) {
         )
     )
 
+    val courts: Flow<List<CourtEntity>> = flow {
+        val uid = requireUserId()
+        emitAll(
+            firestore.collection("courts")
+                .whereEqualTo("venueId", VENUE_ID)
+                .snapshots()
+                .map { snapshot ->
+                    val remoteCourts = snapshot.toObjects(
+                        FirestoreCourt::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                    if (remoteCourts.isEmpty()) {
+                        courtDocIdByNumericId[1] = "court_1"
+                        courtDocIdByNumericId[2] = "court_2"
+                        defaultCourts()
+                    } else {
+                        remoteCourts
+                            .sortedBy { it.courtNumber }
+                            .map { fc ->
+                                val idInt = fc.courtNumber.toInt().coerceAtLeast(1)
+                                if (fc.id.isNotBlank()) {
+                                    courtDocIdByNumericId[idInt] = fc.id
+                                }
+                                CourtEntity(
+                                    id = idInt,
+                                    name = fc.name.ifBlank { "Lapangan $idInt" },
+                                    surfaceType = fc.surfaceType,
+                                    hourlyRateRegular = fc.hourlyRateRegular,
+                                    hourlyRatePrime = fc.hourlyRatePrime,
+                                    hourlyRateWeekend = fc.hourlyRateWeekend,
+                                    isActive = fc.active
+                                )
+                            }
+                    }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val toLog = firestoreError ?: (error as? Exception)
+                    if (toLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(toLog, OperationType.LIST, "courts")
+                    }
+                    throw error
+                }
+        )
+    }
+
+    private val privateBookingsFlow: Flow<Map<String, FirestorePrivateBooking>> = flow {
+        val uid = requireUserId()
+        val isAdmin = isCurrentUserAdmin()
+        val query = if (isAdmin) {
+            firestore.collectionGroup("bookings")
+        } else {
+            firestore.collection("users").document(uid).collection("bookings")
+        }
+        val logPath = if (isAdmin) "collectionGroup/bookings" else "users/$uid/bookings"
+        emitAll(
+            query.snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        FirestorePrivateBooking::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).associateBy { it.slotId }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val toLog = firestoreError ?: (error as? Exception)
+                    if (toLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(toLog, OperationType.LIST, logPath)
+                    }
+                    emit(emptyMap())
+                }
+        )
+    }
+
+    private val slotsFlow: Flow<List<FirestoreScheduleSlot>> = flow {
+        val uid = requireUserId()
+        emitAll(
+            firestore.collection("schedule_slots")
+                .whereEqualTo("venueId", VENUE_ID)
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        FirestoreScheduleSlot::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val toLog = firestoreError ?: (error as? Exception)
+                    if (toLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(toLog, OperationType.LIST, "schedule_slots")
+                    }
+                    throw error
+                }
+        )
+    }
+
+    val bookings: Flow<List<BookingEntity>> = combine(slotsFlow, privateBookingsFlow) { slots, privateMap ->
+        slots
+            .filter { safeHistoryStatus(it.status) == BookingHistoryStatus.AKTIF }
+            .map { s ->
+                val numId = stableNumericId(s.id)
+                if (s.id.isNotBlank()) {
+                    slotDocIdByNumericId[numId] = s.id
+                }
+                val priv = privateMap[s.id]
+                BookingEntity(
+                    id = numId,
+                    courtId = s.courtId.toInt(),
+                    courtName = s.courtName.ifBlank { "Lapangan ${s.courtId}" },
+                    dayOfWeek = s.dayOfWeek.toInt().coerceIn(1, 7),
+                    startHour = s.startHour.toInt().coerceIn(ScheduleFormatters.OPEN_HOUR, ScheduleFormatters.CLOSE_HOUR - 1),
+                    durationHours = s.durationHours.toInt().coerceAtLeast(1),
+                    customerName = priv?.customerName?.ifBlank { s.displayName } ?: s.displayName,
+                    customerPhone = priv?.customerPhone ?: "",
+                    totalPrice = s.totalPrice,
+                    paidAmount = s.paidAmount,
+                    paymentStatus = safePaymentStatus(s.paymentStatus),
+                    reminderEnabled = s.reminderEnabled,
+                    reminderSentCount = s.reminderSentCount.toInt(),
+                    notes = priv?.notes?.ifBlank { s.notes } ?: s.notes,
+                    createdAtMillis = s.createdAt?.toDate()?.time ?: System.currentTimeMillis()
+                )
+            }
+            .sortedWith(compareBy<BookingEntity> { it.dayOfWeek }.thenBy { it.startHour }.thenBy { it.courtId })
+    }
+
+    val bookingHistory: Flow<List<BookingHistoryEntity>> = combine(slotsFlow, privateBookingsFlow) { slots, privateMap ->
+        slots
+            .map { s ->
+                val numId = stableNumericId(s.id)
+                val priv = privateMap[s.id]
+                BookingHistoryEntity(
+                    id = numId,
+                    bookingId = numId,
+                    courtId = s.courtId.toInt(),
+                    courtName = s.courtName.ifBlank { "Lapangan ${s.courtId}" },
+                    dayOfWeek = s.dayOfWeek.toInt().coerceIn(1, 7),
+                    startHour = s.startHour.toInt(),
+                    durationHours = s.durationHours.toInt().coerceAtLeast(1),
+                    customerName = priv?.customerName?.ifBlank { s.displayName } ?: s.displayName,
+                    customerPhone = priv?.customerPhone ?: "",
+                    totalPrice = s.totalPrice,
+                    paidAmount = s.paidAmount,
+                    paymentStatus = safePaymentStatus(s.paymentStatus),
+                    bookingStatus = safeHistoryStatus(s.status),
+                    notes = priv?.notes?.ifBlank { s.notes } ?: s.notes,
+                    createdAtMillis = s.createdAt?.toDate()?.time ?: System.currentTimeMillis()
+                )
+            }
+            .sortedByDescending { it.createdAtMillis }
+    }
+
+    val reminderLogs: Flow<List<ReminderLogEntity>> = flow {
+        val uid = requireUserId()
+        val path = "users/$uid/reminder_logs"
+        emitAll(
+            firestore.collection("users").document(uid).collection("reminder_logs")
+                .snapshots()
+                .map { snapshot ->
+                    snapshot.toObjects(
+                        FirestoreReminderLog::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    ).map { log ->
+                        ReminderLogEntity(
+                            id = stableNumericId(log.id),
+                            bookingId = stableNumericId(log.bookingDocId),
+                            customerName = log.customerName,
+                            courtName = log.courtName,
+                            scheduleLabel = log.scheduleLabel,
+                            stageLabel = log.stageLabel,
+                            amountDue = log.amountDue,
+                            scheduledForMillis = log.scheduledForMillis,
+                            sentAtMillis = log.sentAtMillis,
+                            status = safeReminderStatus(log.status),
+                            message = log.message
+                        )
+                    }.sortedByDescending { it.scheduledForMillis }
+                }
+                .catch { error ->
+                    val firestoreError = generateSequence(error) { it.cause }
+                        .filterIsInstance<FirebaseFirestoreException>()
+                        .firstOrNull()
+                    if (firestoreError == null && error is CancellationException) throw error
+                    val toLog = firestoreError ?: (error as? Exception)
+                    if (toLog != null && auth.currentUser?.uid == uid) {
+                        handleFirestoreError(toLog, OperationType.LIST, path)
+                    }
+                    throw error
+                }
+        )
+    }
+
     suspend fun ensureDefaultCourts(): Result<Unit> {
         return try {
-            if (courtDao.countCourts() == 0) {
-                courtDao.insertCourts(defaultCourts())
+            requireUserId()
+            if (!isCurrentUserAdmin()) {
+                return Result.success(Unit)
+            }
+            val existing = firestore.collection("courts")
+                .whereEqualTo("venueId", VENUE_ID)
+                .get()
+                .await()
+            if (existing.isEmpty) {
+                val batch = firestore.batch()
+                defaultCourts().forEach { court ->
+                    val docRef = firestore.collection("courts").document("court_${court.id}")
+                    val payload = mapOf(
+                        "venueId" to VENUE_ID,
+                        "courtNumber" to court.id,
+                        "name" to court.name,
+                        "surfaceType" to court.surfaceType,
+                        "hourlyRateRegular" to court.hourlyRateRegular,
+                        "hourlyRatePrime" to court.hourlyRatePrime,
+                        "hourlyRateWeekend" to court.hourlyRateWeekend,
+                        "active" to court.isActive,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    batch.set(docRef, payload)
+                }
+                batch.commit().await()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "courts")
             Result.failure(e)
         }
     }
@@ -152,19 +421,44 @@ class CourtScheduleRepository(private val context: Context) {
             .take(250)
 
         return try {
-            val existingBookings = bookingDao.getAllBookingsOnce()
+            val uid = requireUserId()
+            val liveSnapshot = firestore.collection("schedule_slots")
+                .whereEqualTo("venueId", VENUE_ID)
+                .get()
+                .await()
+            val liveSlots = liveSnapshot.toObjects(
+                FirestoreScheduleSlot::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            ).filter { it.status == BookingHistoryStatus.AKTIF }
+
+            val liveAsBookings = liveSlots.map { s ->
+                BookingEntity(
+                    id = stableNumericId(s.id),
+                    courtId = s.courtId.toInt(),
+                    courtName = s.courtName,
+                    dayOfWeek = s.dayOfWeek.toInt(),
+                    startHour = s.startHour.toInt(),
+                    durationHours = s.durationHours.toInt(),
+                    customerName = s.displayName,
+                    customerPhone = "",
+                    totalPrice = s.totalPrice
+                )
+            }
+
             val conflictingCourts = distinctSelections.filter { sel ->
-                hasTimeConflict(existingBookings, sel.court.id, dayOfWeek, sel.startHour, sel.durationHours)
+                hasTimeConflict(liveAsBookings, sel.court.id, dayOfWeek, sel.startHour, sel.durationHours)
             }
             if (conflictingCourts.isNotEmpty()) {
                 val conflictNames = conflictingCourts.joinToString(" & ") { it.court.name }
                 return Result.failure(
-                    IllegalStateException("$conflictNames sudah dipesan pada jam tersebut.")
+                    IllegalStateException("$conflictNames sudah dipesan pada jam tersebut (sinkron otomatis).")
                 )
             }
 
             val now = System.currentTimeMillis()
+            val bookingDateStr = formatIsoDateForDay(dayOfWeek)
             var remainingDp = paidAmount.coerceAtLeast(0L)
+            val batch = firestore.batch()
             val savedBookings = mutableListOf<BookingEntity>()
 
             distinctSelections.forEachIndexed { index, sel ->
@@ -186,12 +480,54 @@ class CourtScheduleRepository(private val context: Context) {
                     else -> PaymentStatus.UNPAID
                 }
                 val itemNotes = (if (index == 0) combinedFirstNotes else cleanNotes).take(250)
+                val slotId = "slot_${now}_${index}_${court.id}"
+                val publicRef = firestore.collection("schedule_slots").document(slotId)
+                val privateRef = firestore.collection("users").document(uid).collection("bookings").document(slotId)
                 val effectiveReminder = reminderEnabled && effectiveStatus != PaymentStatus.PAID
 
-                val entity = BookingEntity(
+                val publicPayload = mapOf<String, Any>(
+                    "venueId" to VENUE_ID,
+                    "userId" to uid,
+                    "courtId" to court.id,
+                    "courtName" to court.name.take(50),
+                    "dayOfWeek" to dayOfWeek.coerceIn(1, 7),
+                    "bookingDate" to bookingDateStr,
+                    "startHour" to sel.startHour,
+                    "durationHours" to sel.durationHours,
+                    "displayName" to cleanName,
+                    "totalPrice" to totalPrice,
+                    "paidAmount" to effectivePaid,
+                    "paymentStatus" to effectiveStatus,
+                    "racketCount" to if (index == 0) boundedRackets else 0,
+                    "cockCount" to if (index == 0) boundedCocks else 0,
+                    "reminderEnabled" to effectiveReminder,
+                    "reminderSentCount" to 0,
+                    "notes" to itemNotes,
+                    "status" to BookingHistoryStatus.AKTIF,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                batch.set(publicRef, publicPayload)
+
+                val privatePayload = mapOf<String, Any>(
+                    "userId" to uid,
+                    "slotId" to slotId,
+                    "customerName" to cleanName,
+                    "customerPhone" to cleanPhone,
+                    "notes" to itemNotes,
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+                batch.set(privateRef, privatePayload)
+
+                val numericId = stableNumericId(slotId)
+                slotDocIdByNumericId[numericId] = slotId
+
+                val saved = BookingEntity(
+                    id = numericId,
                     courtId = court.id,
                     courtName = court.name,
-                    dayOfWeek = dayOfWeek.coerceIn(1, 7),
+                    dayOfWeek = dayOfWeek,
                     startHour = sel.startHour,
                     durationHours = sel.durationHours,
                     customerName = cleanName,
@@ -204,29 +540,12 @@ class CourtScheduleRepository(private val context: Context) {
                     notes = itemNotes,
                     createdAtMillis = now
                 )
-                val insertedId = bookingDao.insertBooking(entity)
-                val saved = entity.copy(id = insertedId)
                 savedBookings.add(saved)
+            }
 
-                bookingHistoryDao.insertHistory(
-                    BookingHistoryEntity(
-                        bookingId = insertedId,
-                        courtId = court.id,
-                        courtName = court.name,
-                        dayOfWeek = dayOfWeek.coerceIn(1, 7),
-                        startHour = sel.startHour,
-                        durationHours = sel.durationHours,
-                        customerName = cleanName,
-                        customerPhone = cleanPhone,
-                        totalPrice = totalPrice,
-                        paidAmount = effectivePaid,
-                        paymentStatus = effectiveStatus,
-                        bookingStatus = BookingHistoryStatus.AKTIF,
-                        notes = itemNotes,
-                        createdAtMillis = now
-                    )
-                )
+            batch.commit().await()
 
+            savedBookings.forEach { saved ->
                 notifyBookingConfirmed(saved)
                 if (saved.reminderEnabled && saved.paymentStatus != PaymentStatus.PAID) {
                     schedulePaymentReminderAndLog(saved)
@@ -237,144 +556,208 @@ class CourtScheduleRepository(private val context: Context) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.CREATE, "schedule_slots")
             Result.failure(e)
         }
     }
 
     suspend fun markBookingPaid(bookingId: Long): Result<Unit> {
+        val docId = slotDocIdByNumericId[bookingId]
+            ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
+        val docPath = "schedule_slots/$docId"
         return try {
-            val booking = bookingDao.getBookingById(bookingId)
-                ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
-            val updated = booking.copy(
-                paymentStatus = PaymentStatus.PAID,
-                paidAmount = booking.totalPrice,
-                reminderEnabled = false
-            )
-            bookingDao.updateBooking(updated)
-            bookingHistoryDao.updatePaymentForBooking(bookingId, PaymentStatus.PAID, booking.totalPrice)
-            reminderLogDao.updateStatusForBooking(bookingId, ReminderLogStatus.LUNAS, System.currentTimeMillis())
+            requireUserId()
+            val snap = firestore.document(docPath).get().await()
+            val slot = snap.toObject(
+                FirestoreScheduleSlot::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            ) ?: return Result.failure(IllegalStateException("Jadwal tidak tersedia di database."))
+            firestore.document(docPath).update(
+                mapOf(
+                    "paymentStatus" to PaymentStatus.PAID,
+                    "paidAmount" to slot.totalPrice,
+                    "reminderEnabled" to false,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
             PaymentReminderNotifier.cancelPaymentReminder(context, bookingId)
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
             Result.failure(e)
         }
     }
 
     suspend fun recordDownPayment(bookingId: Long, dpAmount: Long): Result<Unit> {
+        val docId = slotDocIdByNumericId[bookingId]
+            ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
+        val docPath = "schedule_slots/$docId"
         return try {
-            val booking = bookingDao.getBookingById(bookingId)
-                ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
-            val newPaid = (booking.paidAmount + dpAmount).coerceIn(0L, booking.totalPrice)
-            val newStatus = if (newPaid >= booking.totalPrice) PaymentStatus.PAID else PaymentStatus.DP
-            val keepReminder = newStatus != PaymentStatus.PAID && booking.reminderEnabled
-            bookingDao.updateBooking(
-                booking.copy(
-                    paidAmount = newPaid,
-                    paymentStatus = newStatus,
-                    reminderEnabled = keepReminder
+            requireUserId()
+            val snap = firestore.document(docPath).get().await()
+            val slot = snap.toObject(
+                FirestoreScheduleSlot::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            ) ?: return Result.failure(IllegalStateException("Jadwal tidak tersedia di database."))
+            val newPaid = (slot.paidAmount + dpAmount).coerceIn(0L, slot.totalPrice)
+            val newStatus = if (newPaid >= slot.totalPrice) PaymentStatus.PAID else PaymentStatus.DP
+            val keepReminder = newStatus != PaymentStatus.PAID && slot.reminderEnabled
+            firestore.document(docPath).update(
+                mapOf(
+                    "paidAmount" to newPaid,
+                    "paymentStatus" to newStatus,
+                    "reminderEnabled" to keepReminder,
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            )
-            bookingHistoryDao.updatePaymentForBooking(bookingId, newStatus, newPaid)
+            ).await()
             if (newStatus == PaymentStatus.PAID) {
-                reminderLogDao.updateStatusForBooking(bookingId, ReminderLogStatus.LUNAS, System.currentTimeMillis())
                 PaymentReminderNotifier.cancelPaymentReminder(context, bookingId)
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
             Result.failure(e)
         }
     }
 
     suspend fun sendImmediateReminder(bookingId: Long): Result<Boolean> {
+        val docId = slotDocIdByNumericId[bookingId]
+            ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
+        val docPath = "schedule_slots/$docId"
         return try {
-            val booking = bookingDao.getBookingById(bookingId)
-                ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
-            val amountDue = (booking.totalPrice - booking.paidAmount).coerceAtLeast(0L)
-            val scheduleLabel = "${ScheduleFormatters.dayName(booking.dayOfWeek)} ${ScheduleFormatters.formatHourRange(booking.startHour, booking.durationHours)}"
+            val uid = requireUserId()
+            val snap = firestore.document(docPath).get().await()
+            val slot = snap.toObject(
+                FirestoreScheduleSlot::class.java,
+                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+            ) ?: return Result.failure(IllegalStateException("Jadwal tidak tersedia."))
+            val amountDue = (slot.totalPrice - slot.paidAmount).coerceAtLeast(0L)
+            val dayInt = slot.dayOfWeek.toInt().coerceIn(1, 7)
+            val startInt = slot.startHour.toInt()
+            val durInt = slot.durationHours.toInt()
+            val scheduleLabel = "${ScheduleFormatters.dayName(dayInt)} ${ScheduleFormatters.formatHourRange(startInt, durInt)}"
             val shown = PaymentReminderNotifier.showPaymentReminderNotification(
                 context = context,
                 bookingId = bookingId,
-                customerName = booking.customerName,
-                courtName = booking.courtName,
+                customerName = slot.displayName,
+                courtName = slot.courtName,
                 scheduleLabel = scheduleLabel,
                 amountDue = amountDue,
                 stageLabel = "Pengingat Pembayaran"
             )
-            bookingDao.updateBooking(booking.copy(reminderSentCount = booking.reminderSentCount + 1))
             val msg = ScheduleFormatters.buildPaymentReminderMessage(
-                customerName = booking.customerName,
-                courtName = booking.courtName,
-                dayOfWeek = booking.dayOfWeek,
-                startHour = booking.startHour,
-                durationHours = booking.durationHours,
+                customerName = slot.displayName,
+                courtName = slot.courtName,
+                dayOfWeek = dayInt,
+                startHour = startInt,
+                durationHours = durInt,
                 amountDue = amountDue
-            )
-            reminderLogDao.insertLog(
-                ReminderLogEntity(
-                    bookingId = bookingId,
-                    customerName = booking.customerName,
-                    courtName = booking.courtName,
-                    scheduleLabel = scheduleLabel,
-                    stageLabel = "Pengingat Pembayaran",
-                    amountDue = amountDue,
-                    scheduledForMillis = System.currentTimeMillis(),
-                    sentAtMillis = System.currentTimeMillis(),
-                    status = ReminderLogStatus.TERKIRIM,
-                    message = msg
+            ).take(400)
+
+            firestore.document(docPath).update(
+                mapOf(
+                    "reminderSentCount" to (slot.reminderSentCount + 1L).coerceAtMost(100L),
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
-            )
+            ).await()
+
+            val logId = "log_${System.currentTimeMillis()}_remind"
+            firestore.collection("users").document(uid).collection("reminder_logs").document(logId)
+                .set(
+                    mapOf(
+                        "userId" to uid,
+                        "bookingDocId" to docId,
+                        "customerName" to slot.displayName,
+                        "courtName" to slot.courtName,
+                        "scheduleLabel" to scheduleLabel,
+                        "stageLabel" to "Pengingat Pembayaran",
+                        "amountDue" to amountDue,
+                        "scheduledForMillis" to System.currentTimeMillis(),
+                        "sentAtMillis" to System.currentTimeMillis(),
+                        "status" to ReminderLogStatus.TERKIRIM,
+                        "message" to msg,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+
             Result.success(shown)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
             Result.failure(e)
         }
     }
 
     suspend fun cancelBooking(bookingId: Long): Result<Unit> {
+        val docId = slotDocIdByNumericId[bookingId]
+            ?: return Result.failure(IllegalArgumentException("Data pemesanan tidak ditemukan."))
+        val docPath = "schedule_slots/$docId"
         return try {
+            requireUserId()
             PaymentReminderNotifier.cancelPaymentReminder(context, bookingId)
-            bookingDao.deleteBookingById(bookingId)
-            bookingHistoryDao.updateBookingStatus(bookingId, BookingHistoryStatus.DIBATALKAN)
-            reminderLogDao.deleteLogsForBooking(bookingId)
+            firestore.document(docPath).update(
+                mapOf(
+                    "status" to BookingHistoryStatus.DIBATALKAN,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docPath)
             Result.failure(e)
         }
     }
 
     suspend fun saveCourt(court: CourtEntity): Result<Unit> {
         return try {
-            val cleanName = court.name.trim().take(50).ifEmpty { "Lapangan" }
-            val existingCourts = courtDao.getAllCourtsOnce()
-            val oldCourt = existingCourts.find { it.id == court.id }
-            val updated = court.copy(
-                name = cleanName,
-                surfaceType = court.surfaceType.trim().take(80),
-                hourlyRateRegular = court.hourlyRateRegular.coerceAtLeast(0L),
-                hourlyRatePrime = court.hourlyRatePrime.coerceAtLeast(0L),
-                hourlyRateWeekend = court.hourlyRateWeekend.coerceAtLeast(0L)
-            )
-            if (court.id == 0 || oldCourt == null) {
-                courtDao.insertCourt(updated)
+            requireUserId()
+            val courtNumber = if (court.id == 0) {
+                (courtDocIdByNumericId.keys.maxOrNull() ?: 2) + 1
             } else {
-                courtDao.updateCourt(updated)
-                if (oldCourt.name != cleanName) {
-                    bookingDao.renameCourtInBookings(oldCourt.name, cleanName)
-                    bookingHistoryDao.renameCourtInHistory(oldCourt.name, cleanName)
-                    reminderLogDao.renameCourtInLogs(oldCourt.name, cleanName)
-                }
+                court.id
+            }
+            val docId = courtDocIdByNumericId[courtNumber] ?: "court_$courtNumber"
+            val docRef = firestore.collection("courts").document(docId)
+            val existingSnap = docRef.get().await()
+            if (existingSnap.exists()) {
+                docRef.update(
+                    mapOf(
+                        "name" to court.name.trim().take(50).ifEmpty { "Lapangan $courtNumber" },
+                        "surfaceType" to court.surfaceType.trim().take(80),
+                        "hourlyRateRegular" to court.hourlyRateRegular.coerceAtLeast(0L),
+                        "hourlyRatePrime" to court.hourlyRatePrime.coerceAtLeast(0L),
+                        "hourlyRateWeekend" to court.hourlyRateWeekend.coerceAtLeast(0L),
+                        "active" to court.isActive,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                docRef.set(
+                    mapOf(
+                        "venueId" to VENUE_ID,
+                        "courtNumber" to courtNumber,
+                        "name" to court.name.trim().take(50).ifEmpty { "Lapangan $courtNumber" },
+                        "surfaceType" to court.surfaceType.trim().take(80),
+                        "hourlyRateRegular" to court.hourlyRateRegular.coerceAtLeast(0L),
+                        "hourlyRatePrime" to court.hourlyRatePrime.coerceAtLeast(0L),
+                        "hourlyRateWeekend" to court.hourlyRateWeekend.coerceAtLeast(0L),
+                        "active" to court.isActive,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, "courts")
             Result.failure(e)
         }
     }
@@ -385,25 +768,35 @@ class CourtScheduleRepository(private val context: Context) {
 
     private suspend fun notifyBookingConfirmed(booking: BookingEntity) {
         PaymentReminderNotifier.showBookingConfirmedNotification(context, booking)
+        val uid = auth.currentUser?.uid ?: return
+        val docId = slotDocIdByNumericId[booking.id] ?: return
         val amountDue = (booking.totalPrice - booking.paidAmount).coerceAtLeast(0L)
         val scheduleLabel = "${ScheduleFormatters.dayName(booking.dayOfWeek)} ${ScheduleFormatters.formatHourRange(booking.startHour, booking.durationHours)}"
-        reminderLogDao.insertLog(
-            ReminderLogEntity(
-                bookingId = booking.id,
-                customerName = booking.customerName,
-                courtName = booking.courtName,
-                scheduleLabel = scheduleLabel,
-                stageLabel = "Konfirmasi Pemesanan",
-                amountDue = amountDue,
-                scheduledForMillis = System.currentTimeMillis(),
-                sentAtMillis = System.currentTimeMillis(),
-                status = ReminderLogStatus.KONFIRMASI,
-                message = "Pemesanan ${booking.courtName} ($scheduleLabel) dikonfirmasi."
-            )
-        )
+        val logId = "log_${System.currentTimeMillis()}_confirm_${booking.courtId}"
+        runCatching {
+            firestore.collection("users").document(uid).collection("reminder_logs").document(logId)
+                .set(
+                    mapOf(
+                        "userId" to uid,
+                        "bookingDocId" to docId,
+                        "customerName" to booking.customerName,
+                        "courtName" to booking.courtName,
+                        "scheduleLabel" to scheduleLabel,
+                        "stageLabel" to "Konfirmasi Pemesanan",
+                        "amountDue" to amountDue,
+                        "scheduledForMillis" to System.currentTimeMillis(),
+                        "sentAtMillis" to System.currentTimeMillis(),
+                        "status" to ReminderLogStatus.KONFIRMASI,
+                        "message" to "Pemesanan ${booking.courtName} ($scheduleLabel) dikonfirmasi.",
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+        }
     }
 
     private suspend fun schedulePaymentReminderAndLog(booking: BookingEntity) {
+        val uid = auth.currentUser?.uid ?: return
+        val docId = slotDocIdByNumericId[booking.id] ?: return
         val amountDue = (booking.totalPrice - booking.paidAmount).coerceAtLeast(0L)
         val scheduleLabel = "${ScheduleFormatters.dayName(booking.dayOfWeek)} ${ScheduleFormatters.formatHourRange(booking.startHour, booking.durationHours)}"
         val msg = ScheduleFormatters.buildPaymentReminderMessage(
@@ -413,24 +806,56 @@ class CourtScheduleRepository(private val context: Context) {
             startHour = booking.startHour,
             durationHours = booking.durationHours,
             amountDue = amountDue
-        )
+        ).take(400)
         val triggerAt = PaymentReminderNotifier.schedulePaymentReminder(context, booking) ?: return
-        reminderLogDao.insertLog(
-            ReminderLogEntity(
-                bookingId = booking.id,
-                customerName = booking.customerName,
-                courtName = booking.courtName,
-                scheduleLabel = scheduleLabel,
-                stageLabel = "Pengingat Pembayaran",
-                amountDue = amountDue,
-                scheduledForMillis = triggerAt,
-                status = ReminderLogStatus.TERJADWAL,
-                message = msg
-            )
-        )
+        val logId = "log_${System.currentTimeMillis()}_sched_${booking.courtId}"
+        runCatching {
+            firestore.collection("users").document(uid).collection("reminder_logs").document(logId)
+                .set(
+                    mapOf(
+                        "userId" to uid,
+                        "bookingDocId" to docId,
+                        "customerName" to booking.customerName,
+                        "courtName" to booking.courtName,
+                        "scheduleLabel" to scheduleLabel,
+                        "stageLabel" to "Pengingat Pembayaran",
+                        "amountDue" to amountDue,
+                        "scheduledForMillis" to triggerAt,
+                        "status" to ReminderLogStatus.TERJADWAL,
+                        "message" to msg,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+        }
+    }
+
+    private fun safePaymentStatus(raw: String): String = when (raw) {
+        PaymentStatus.PAID -> PaymentStatus.PAID
+        PaymentStatus.DP -> PaymentStatus.DP
+        else -> PaymentStatus.UNPAID
+    }
+
+    private fun safeHistoryStatus(raw: String): String = when (raw) {
+        BookingHistoryStatus.DIBATALKAN -> BookingHistoryStatus.DIBATALKAN
+        else -> BookingHistoryStatus.AKTIF
+    }
+
+    private fun safeReminderStatus(raw: String): String = when (raw) {
+        ReminderLogStatus.KONFIRMASI -> ReminderLogStatus.KONFIRMASI
+        ReminderLogStatus.TERKIRIM -> ReminderLogStatus.TERKIRIM
+        ReminderLogStatus.LUNAS -> ReminderLogStatus.LUNAS
+        else -> ReminderLogStatus.TERJADWAL
+    }
+
+    private fun formatIsoDateForDay(dayOfWeek: Int): String {
+        val date = ScheduleFormatters.dateForIsoDayInCurrentWeek(dayOfWeek)
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        return sdf.format(date)
     }
 
     companion object {
+        const val VENUE_ID = "manisrejo"
+        const val ADMIN_EMAIL = "Riskykharis00@gmail.com"
         const val EDITOR_PIN_DEFAULT = "00000"
     }
 }

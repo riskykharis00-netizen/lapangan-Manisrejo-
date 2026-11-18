@@ -292,4 +292,31 @@ test("Admin terverifikasi bisa menandai Lunas dan mengelola Lapangan; email belu
       updatedAt: new Date(Date.now() - 1000),
     })
   );
+
+  // Admin dapat sinkronkan database kontak pemesan via collectionGroup("bookings"), sedangkan user biasa ditolak
+  const aliceDbForCg = dbFor(
+    testEnv.authenticatedContext(ALICE_UID, {
+      email: "alice@example.com",
+      email_verified: true,
+    })
+  );
+  await assertSucceeds(
+    aliceDbForCg.collection("users").doc(ALICE_UID).collection("bookings").doc("slot_alice_cg").set({
+      userId: ALICE_UID,
+      slotId: "slot_pending",
+      customerName: "Klub RT 04",
+      customerPhone: "085711223344",
+      createdAt: ts,
+      updatedAt: ts,
+    })
+  );
+  await assertSucceeds(realAdminDb.collectionGroup("bookings").get());
+  await assertFails(
+    dbFor(
+      testEnv.authenticatedContext(BOB_UID, {
+        email: "bob@example.com",
+        email_verified: true,
+      })
+    ).collectionGroup("bookings").get()
+  );
 });
