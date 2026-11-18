@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lapangan Bulutangkis Manisrejo — Portal Pemesanan Penyewa</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="navbar">
+    <div class="navbar-inner">
+      <div class="brand">
+        <div class="brand-logo">M</div>
+        <div>
+          <p class="brand-title" id="venueNameNav">Lapangan Bulutangkis Manisrejo</p>
+          <p class="brand-sub" id="todayNavDate">Portal Pemesanan Penyewa • 08:00 – 00:00</p>
+        </div>
+      </div>
+      <nav class="nav-links" aria-label="Navigasi Penyewa">
+        <button class="nav-pill active" id="tabJadwalBtn" type="button">Jadwal Lapangan</button>
+        <button class="nav-pill" id="tabMingguanBtn" type="button">Ringkasan Sen–Min</button>
+        <button class="nav-pill" id="tabRiwayatBtn" type="button">Riwayat</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <span class="hero-badge"><span class="hero-dot"></span><span id="heroTodayBadge">PORTAL PENYEWA • LAPANGAN A &amp; B</span></span>
+      <h1 id="venueNameHero">Lapangan Bulutangkis Manisrejo</h1>
+      <div class="hero-accent"></div>
+      <p>Jadwal Senin – Minggu pukul <strong>08:00 – 00:00</strong>. Sewa lapangan <strong>Rp 15.000/jam</strong>, sewa raket <strong>Rp 10.000</strong>, dan beli cock <strong>Rp 12.000</strong>.</p>
+      <div class="hero-actions">
+        <a href="#form-booking" class="btn btn-lime">+ Pesan Lapangan</a>
+        <a id="waHeroBtn" class="btn btn-whatsapp" target="_blank" rel="noopener">WhatsApp 082142272367</a>
+        <a id="mapsHeroBtn" class="btn btn-outline" target="_blank" rel="noopener">Lokasi Google Maps</a>
+      </div>
+    </section>
+
+    <section id="sectionJadwal" class="form-grid">
+      <div class="card">
+        <h2 class="section-title">Pilih Hari Bermain (Senin – Minggu)</h2>
+        <p class="section-sub">Ketuk hari untuk memeriksa ketersediaan Lapangan A &amp; Lapangan B.</p>
+        <div class="day-strip" id="dayStrip"></div>
+        <div class="grid-2" style="margin-top:14px">
+          <div class="stat-box stat-booked">
+            <div style="font-size:12px;font-weight:700">SUDAH DIPESAN</div>
+            <div class="mono" style="font-size:22px;font-weight:800" id="statBookedHours">0 jam</div>
+          </div>
+          <div class="stat-box stat-available">
+            <div style="font-size:12px;font-weight:700">TERSEDIA</div>
+            <div class="mono" style="font-size:22px;font-weight:800" id="statAvailableHours">0 jam</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+          <h2 class="section-title" style="margin:0" id="scheduleHeading">Jadwal Lapangan</h2>
+          <div class="chip-row" id="courtFilterChips"></div>
+        </div>
+        <div class="chip-row" id="statusFilterChips" style="margin-bottom:14px"></div>
+        <div class="court-columns" id="slotList"></div>
+      </div>
+
+      <div class="card" id="form-booking">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+          <h2 class="section-title" style="margin:0">Pesan Lapangan</h2>
+          <span class="status-pill status-paid">Rp 15.000/jam per lapangan</span>
+        </div>
+        <p class="section-sub">Pilih lapangan, atur tanggal &amp; jam main (08:00 – 00:00), lalu isi nama Anda.</p>
+        <form id="renterBookingForm" class="form-grid">
+          <div class="grid-2">
+            <div class="field">
+              <label>1. Pilih Lapangan</label>
+              <div class="chip-row" id="formCourtModeChips"></div>
+            </div>
+            <div class="field">
+              <label for="inputDate">2. Tanggal &amp; Hari <span id="inputDayBadge" class="status-pill status-paid" style="margin-left:6px;padding:2px 8px;font-size:11px">Hari ini</span></label>
+              <input id="inputDate" type="date" required />
+            </div>
+          </div>
+
+          <div class="field">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+              <label style="margin:0">3. Jam Main Manual (08:00 – 00:00)</label>
+              <button type="button" id="syncHoursBtn" class="chip hidden" style="padding:5px 12px;font-size:12px">Samakan Jam A &amp; B</button>
+            </div>
+            <div id="perCourtHoursContainer" class="grid-2"></div>
+          </div>
+
+          <div class="field">
+            <label>4. Tambahan Sewa Raket &amp; Beli Cock (opsional)</label>
+            <div class="grid-2">
+              <div class="addon-card">
+                <div>
+                  <div style="font-weight:800;font-size:14px">Sewa Raket</div>
+                  <div style="font-size:12px;color:var(--muted);font-weight:600">Rp 10.000 / raket</div>
+                </div>
+                <div class="stepper">
+                  <button type="button" class="stepper-btn" id="racketMinusBtn" aria-label="Kurangi sewa raket">−</button>
+                  <span class="stepper-val mono" id="racketCountText">0</span>
+                  <button type="button" class="stepper-btn" id="racketPlusBtn" aria-label="Tambah sewa raket">+</button>
+                </div>
+              </div>
+              <div class="addon-card">
+                <div>
+                  <div style="font-weight:800;font-size:14px">Beli Cock</div>
+                  <div style="font-size:12px;color:var(--muted);font-weight:600">Rp 12.000 / cock</div>
+                </div>
+                <div class="stepper">
+                  <button type="button" class="stepper-btn" id="cockMinusBtn" aria-label="Kurangi beli cock">−</button>
+                  <span class="stepper-val mono" id="cockCountText">0</span>
+                  <button type="button" class="stepper-btn" id="cockPlusBtn" aria-label="Tambah beli cock">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="inputCustomerName">5. Nama Penyewa / Klub *</label>
+              <input id="inputCustomerName" type="text" placeholder="Contoh: Tim Manisrejo" required />
+            </div>
+            <div class="field">
+              <label for="inputCustomerPhone">No. WhatsApp (opsional)</label>
+              <input id="inputCustomerPhone" type="tel" placeholder="08xxxxxxxxxx" />
+            </div>
+          </div>
+
+          <div class="stat-box" style="background:var(--surface-soft);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <div>
+              <div id="priceSummaryText" style="font-size:13px;font-weight:700;color:var(--muted)">Lapangan A • 2 jam</div>
+              <div class="mono" id="priceTotalText" style="font-size:22px;font-weight:800;color:var(--emerald)">Rp 30.000</div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="flex:1 1 220px">Pesan Sekarang &amp; Kirim WA</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section id="sectionMingguan" class="hidden">
+      <div class="card">
+        <h2 class="section-title">Ringkasan Jadwal Senin – Minggu</h2>
+        <p class="section-sub">Pantau jam sudah dipesan dan jam kosong di Lapangan A &amp; Lapangan B selama seminggu penuh.</p>
+        <div class="slot-list" id="weeklyOverviewList"></div>
+      </div>
+    </section>
+
+    <section id="sectionRiwayat" class="hidden">
+      <div class="card">
+        <h2 class="section-title">Riwayat Pemesanan Lapangan A &amp; B</h2>
+        <p class="section-sub">Daftar pemesanan yang tercatat di portal pemesanan.</p>
+        <div class="chip-row" id="historyFilterChips" style="margin-bottom:14px"></div>
+        <div class="slot-list" id="historyList"></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>
+        <strong style="font-size:17px" id="footerVenueName">Lapangan Bulutangkis Manisrejo</strong>
+        <p style="margin:4px 0 0;opacity:0.86">Buka Setiap Hari Senin – Minggu • 08:00 – 00:00 • Lapangan A &amp; Lapangan B</p>
+      </div>
+      <div class="hero-actions">
+        <a id="waFooterBtn" class="btn btn-whatsapp" target="_blank" rel="noopener">WA 082142272367</a>
+        <a id="mapsFooterBtn" class="btn btn-outline" target="_blank" rel="noopener">Google Maps</a>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Lapangan Bulutangkis Manisrejo</span>
+        <a href="editor.html" class="footer-admin-link">Login Pengelola / Editor Website</a>
+      </div>
+    </footer>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="js/storage.js"></script>
+  <script src="js/renter.js"></script>
+</body>
+</html>
